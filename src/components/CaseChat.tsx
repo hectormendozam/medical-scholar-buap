@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Send, User, MessageSquare } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn } from '../lib/utils';
 
 interface Message {
   id: string;

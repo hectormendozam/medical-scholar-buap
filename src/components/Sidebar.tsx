@@ -5,15 +5,17 @@ import {
   FolderHeart as FolderIcon, 
   Settings as SettingsIcon, 
   Plus as PlusIcon,
-  LayoutGrid
+  LayoutGrid,
+  Bell as BellIcon
 } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 
 const navItems = [
-  { icon: DashboardIcon, label: 'Dashboard', path: '/' },
+  { icon: DashboardIcon, label: 'Dashboard', path: '/dashboard' },
   { icon: MedicalIcon, label: 'Casos Clínicos', path: '/casos' },
   { icon: FolderIcon, label: 'Expedientes', path: '/expedientes' },
-  { icon: LayoutGrid, label: 'Revisiones', path: '/revisiones/042-B' },
+  { icon: LayoutGrid, label: 'Revisiones', path: '/revisiones' },
+  { icon: BellIcon, label: 'Notificaciones', path: '/notificaciones' },
   { icon: SettingsIcon, label: 'Configuración', path: '/configuracion' },
 ];
 
@@ -29,7 +31,8 @@ export function Sidebar() {
 
       <nav className="flex-1 flex flex-col gap-1">
         {navItems.map((item) => {
-          const isActive = location.pathname === item.path;
+  const isActive = location.pathname === item.path || 
+            (item.path !== '/dashboard' && location.pathname.startsWith(item.path));
           return (
             <Link
               key={item.path}
