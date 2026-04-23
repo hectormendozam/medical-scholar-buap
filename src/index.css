@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Noto Serif", ui-serif, Georgia, serif;
+  --font-label: "Public Sans", sans-serif;
+
+  --color-primary: #094cb2;
+  --color-primary-container: #3366cc;
+  --color-on-primary: #ffffff;
+  
+  --color-secondary: #5a5f63;
+  --color-secondary-container: #dfe3e8;
+  
+  --color-tertiary: #6d5e00;
+  --color-tertiary-container: #bfab49;
+  
+  --color-background: #faf9fa;
+  --color-on-background: #1b1c1d;
+  
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f5f3f4;
+  --color-surface-container: #efedee;
+  --color-surface-container-high: #e9e8e9;
+  --color-surface-container-highest: #e3e2e3;
+  --color-surface-dim: #dbdadb;
+  
+  --color-outline: #737784;
+  --color-outline-variant: #c3c6d5;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-on-background font-sans;
+  }
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif:wght@400;700&family=Inter:wght@300;400;500;600&family=Public+Sans:wght@300;400;600&display=swap');
+
