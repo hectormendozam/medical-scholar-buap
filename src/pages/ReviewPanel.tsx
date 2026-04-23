@@ -16,6 +16,14 @@ import {
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 
+import { supabase } from '../lib/supabase';
+import { Database } from '../types/database.types';
+
+type Resolucion = Database['public']['Tables']['resoluciones']['Row'] & {
+  perfiles?: { full_name: string } | null;
+  evaluaciones?: { calificacion: number }[] | null;
+};
+
 const stats = [
   { label: 'Total Entregas', value: '42', progress: 100, color: 'primary' },
   { label: 'Pendientes', value: '12', progress: 28, color: 'red' },
@@ -23,39 +31,28 @@ const stats = [
   { label: 'Tasa de Aprobación', value: '92%', progress: 92, color: 'amber' },
 ];
 
-const entregas = [
-  { 
-    id: '20214569', 
-    nombre_estudiante: 'Ramírez, Mariana', 
-    fecha_entrega: '22 May, 2024 · 14:30', 
-    estatus: 'Pendiente', 
-    calificacion: null, 
-    active: true 
-  },
-  { 
-    id: '20213021', 
-    nombre_estudiante: 'Hernández, Luis', 
-    fecha_entrega: '21 May, 2024 · 09:12', 
-    estatus: 'Calificado', 
-    calificacion: '9.5' 
-  },
-  { 
-    id: '20210088', 
-    nombre_estudiante: 'Castillo, Pedro', 
-    fecha_entrega: '20 May, 2024 · 18:45', 
-    estatus: 'Calificado', 
-    calificacion: '8.0' 
-  },
-  { 
-    id: '20224192', 
-    nombre_estudiante: 'Arriaga, Gloria', 
-    fecha_entrega: '22 May, 2024 · 11:20', 
-    estatus: 'Pendiente', 
-    calificacion: null 
-  },
-];
-
 export function ReviewPanel() {
+  const [entregas, setEntregas] = React.useState<Resolucion[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    async function fetchEntregas() {
+      // Intentamos traer las resoluciones y sus perfiles relacionados si existen
+      const { data, error } = await supabase
+        .from('resoluciones')
+        .select(`
+          *,
+          evaluaciones ( calificacion )
+        `)
+        .order('fecha_entrega', { ascending: false });
+
+      if (data) {
+        setEntregas(data as Resolucion[]);
+      }
+      setLoading(false);
+    }
+    fetchEntregas();
+  }, []);
   return (
     <div className="flex-1 flex flex-col gap-10">
       <div className="flex-1 flex gap-10">
@@ -120,49 +117,62 @@ export function ReviewPanel() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-container">
-                {entregas.map((entrega, i) => (
-                  <tr key={i} className={cn("transition-colors", entrega.active ? "bg-primary/5" : "hover:bg-surface-container-low")}>
+                {loading ? (
+                  <tr><td colSpan={5} className="px-6 py-10 text-center text-secondary">Cargando entregas...</td></tr>
+                ) : entregas.length === 0 ? (
+                  <tr><td colSpan={5} className="px-6 py-10 text-center text-secondary">No hay entregas pendientes.</td></tr>
+                ) : entregas.map((entrega, i) => {
+                  const nombre = entrega.perfiles?.full_name || 'Estudiante ' + entrega.estudiante_id.substring(0,4);
+                  const calificacion = entrega.evaluaciones?.[0]?.calificacion;
+                  const isActive = i === 0; // Solo para mostrar uno seleccionado en UI
+                  
+                  return (
+                  <tr key={entrega.id} className={cn("transition-colors", isActive ? "bg-primary/5" : "hover:bg-surface-container-low")}>
                     <td className="px-6 py-5">
                       <div className="flex items-center gap-4">
                          <div className={cn(
-                           "w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs",
-                           entrega.active ? "bg-primary text-white" : "bg-surface-container-high text-secondary"
+                           "w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs uppercase",
+                           isActive ? "bg-primary text-white" : "bg-surface-container-high text-secondary"
                          )}>
-                           {entrega.nombre_estudiante.split(',')[0][0]}{entrega.nombre_estudiante.split(' ')[1][0]}
+                           {nombre.substring(0,2)}
                          </div>
                          <div>
-                            <p className="text-sm font-bold text-on-background">{entrega.nombre_estudiante}</p>
-                            <p className="text-[10px] text-outline font-medium tracking-wider">ID: {entrega.id}</p>
+                            <p className="text-sm font-bold text-on-background">{nombre}</p>
+                            <p className="text-[10px] text-outline font-medium tracking-wider">ID: {entrega.id.substring(0,8)}</p>
                          </div>
                       </div>
                     </td>
                     <td className="px-6 py-5 text-sm text-secondary font-medium tracking-tight">
-                      {entrega.fecha_entrega}
+                      {new Date(entrega.fecha_entrega).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-5">
                       <span className={cn(
                         "inline-block px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider",
-                        entrega.estatus === 'Pendiente' ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"
+                        entrega.estatus === 'En Revisión' ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"
                       )}>
-                        {entrega.estatus}
+                        {entrega.estatus || 'Pendiente'}
                       </span>
                     </td>
                     <td className="px-6 py-5">
-                      <span className={cn(
-                        "text-sm font-black",
-                        entrega.calificacion ? "text-on-background" : "text-outline opacity-40"
-                      )}>
-                        {entrega.calificacion ? `${entrega.calificacion} / 10` : '— / 10'}
-                      </span>
+                      {calificacion ? (
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="text-primary" size={16} />
+                          <span className="font-bold text-primary">{calificacion} / 10</span>
+                        </div>
+                      ) : (
+                        <span className="text-xs font-bold text-secondary flex items-center gap-2">
+                          <Clock size={14} /> Por Evaluar
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-5 text-right">
-                       <button className="inline-flex items-center gap-2 text-xs font-black text-primary hover:underline uppercase tracking-widest">
-                          {entrega.estatus === 'Pendiente' ? 'Revisar' : 'Ver'} 
-                          {entrega.estatus === 'Pendiente' ? <ExternalLink size={14} /> : <Eye size={14} />}
-                       </button>
+                      <button className="p-2 text-secondary hover:text-primary hover:bg-surface-container rounded-lg transition-colors inline-flex">
+                        <ChevronRight size={20} />
+                      </button>
                     </td>
                   </tr>
-                ))}
+                )})}
+
               </tbody>
             </table>
             

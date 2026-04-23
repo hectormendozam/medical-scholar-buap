@@ -25,25 +25,25 @@ export default function App() {
 
         <Route element={<Layout />}>
           {/* Dashboard */}
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="dashboard" element={<Dashboard />} />
 
           {/* Casos Clínicos */}
-          <Route path="/casos" element={<ClinicalCases />} />
-          <Route path="/casos/nuevo" element={<NewCase />} />
-          <Route path="/casos/:id" element={<CaseDetail />} />
+          <Route path="casos" element={<ClinicalCases />} />
+          <Route path="casos/nuevo" element={<NewCase />} />
+          <Route path="casos/:id" element={<CaseDetail />} />
 
           {/* Expedientes / Archivos de apoyo */}
-          <Route path="/expedientes" element={<Files />} />
+          <Route path="expedientes" element={<Files />} />
 
           {/* Panel de revisión para instructores */}
-          <Route path="/revisiones" element={<ReviewPanel />} />
-          <Route path="/revisiones/:id" element={<ReviewPanel />} />
+          <Route path="revisiones" element={<ReviewPanel />} />
+          <Route path="revisiones/:id" element={<ReviewPanel />} />
 
           {/* Notificaciones */}
-          <Route path="/notificaciones" element={<Notificaciones />} />
+          <Route path="notificaciones" element={<Notificaciones />} />
 
           {/* Perfil / Configuración */}
-          <Route path="/configuracion" element={<Profile />} />
+          <Route path="configuracion" element={<Profile />} />
 
           {/* Catch-all redirect */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

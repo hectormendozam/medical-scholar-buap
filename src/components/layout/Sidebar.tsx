@@ -6,16 +6,18 @@ import {
   FolderOpen, 
   Bell, 
   Settings, 
-  Plus 
+  Plus,
+  LayoutGrid
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 const navItems = [
   { icon: LayoutDashboard, label: 'Dashboard', to: '/dashboard' },
-  { icon: Stethoscope, label: 'Casos Clínicos', to: '/cases' },
-  { icon: FolderOpen, label: 'Expedientes', to: '/files' },
-  { icon: Bell, label: 'Notificaciones', to: '/notifications' },
-  { icon: Settings, label: 'Configuración', to: '/settings' },
+  { icon: Stethoscope, label: 'Casos Clínicos', to: '/casos' },
+  { icon: FolderOpen, label: 'Expedientes', to: '/expedientes' },
+  { icon: LayoutGrid, label: 'Revisiones', to: '/revisiones' },
+  { icon: Bell, label: 'Notificaciones', to: '/notificaciones' },
+  { icon: Settings, label: 'Configuración', to: '/configuracion' },
 ];
 
 export function Sidebar() {
@@ -47,10 +49,10 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-auto px-2 pb-4">
-        <button className="w-full py-4 px-4 bg-gradient-to-r from-primary to-primary-container text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+        <NavLink to="/casos/nuevo" className="w-full py-4 px-4 bg-gradient-to-r from-primary to-primary-container text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
           <Plus size={20} />
           <span className="text-sm">Nuevo Caso</span>
-        </button>
+        </NavLink>
       </div>
     </aside>
   );

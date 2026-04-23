@@ -23,6 +23,10 @@ export function CaseDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [caso, setCaso] = useState<CasoClinico | null>(null);
+  const [diagnostico, setDiagnostico] = useState('');
+  const [planTerapeutico, setPlanTerapeutico] = useState('');
+  const [justificacion, setJustificacion] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     async function fetchCase() {
@@ -185,13 +189,38 @@ export function CaseDetail() {
               </div>
             </div>
 
-            <form className="p-8 space-y-8" onSubmit={(e) => e.preventDefault()}>
+            <form className="p-8 space-y-8" onSubmit={async (e) => {
+              e.preventDefault();
+              if (!caso) return;
+              setIsSubmitting(true);
+              const dummyEstudianteId = '00000000-0000-0000-0000-000000000001';
+              
+              const { error } = await supabase.from('resoluciones').insert({
+                estudiante_id: dummyEstudianteId,
+                caso_id: caso.id,
+                diagnostico,
+                plan_terapeutico: planTerapeutico,
+                justificacion,
+                estatus: 'En Revisión'
+              } as any);
+              
+              setIsSubmitting(false);
+              if (!error) {
+                alert('¡Resolución enviada correctamente!');
+                navigate('/dashboard');
+              } else {
+                alert('Error al enviar: ' + error.message);
+              }
+            }}>
               {/* Diagnóstico */}
               <div className="space-y-3">
                 <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 ml-1">
                   <Stethoscope size={14} className="text-primary" /> Diagnóstico Diferencial
                 </label>
                 <textarea 
+                  value={diagnostico}
+                  onChange={(e) => setDiagnostico(e.target.value)}
+                  required
                   className="w-full h-32 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary focus:bg-white transition-all outline-none resize-none font-serif"
                   placeholder="Liste al menos 3 diagnósticos probables..."
                 />
@@ -202,18 +231,13 @@ export function CaseDetail() {
                 <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 ml-1">
                   <Activity size={14} className="text-primary" /> Plan Terapéutico
                 </label>
-                <div className="space-y-3">
-                  {[
-                    "Furosemida IV (Bolo inicial)",
-                    "Nitroglicerina en Infusión",
-                    "Ventilación Mecánica No Invasiva"
-                  ].map((option, i) => (
-                    <label key={i} className="flex items-center gap-4 p-4 rounded-xl border border-outline-variant/20 hover:bg-surface-container-low transition-colors cursor-pointer group">
-                      <input type="checkbox" className="w-5 h-5 rounded-md text-primary focus:ring-primary border-outline-variant/50 cursor-pointer" />
-                      <span className="text-sm font-medium group-hover:text-primary transition-colors">{option}</span>
-                    </label>
-                  ))}
-                </div>
+                <textarea 
+                  value={planTerapeutico}
+                  onChange={(e) => setPlanTerapeutico(e.target.value)}
+                  required
+                  className="w-full h-32 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary focus:bg-white transition-all outline-none resize-none font-serif"
+                  placeholder="Describa el plan terapéutico a seguir..."
+                />
               </div>
 
               {/* Justificación */}
@@ -222,6 +246,9 @@ export function CaseDetail() {
                   <History size={14} className="text-primary" /> Justificación Clínica
                 </label>
                 <textarea 
+                  value={justificacion}
+                  onChange={(e) => setJustificacion(e.target.value)}
+                  required
                   className="w-full h-40 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary focus:bg-white transition-all outline-none resize-none"
                   placeholder="Fundamente su decisión basándose en las guías de práctica clínica..."
                 />
@@ -231,9 +258,10 @@ export function CaseDetail() {
               {/* CTA */}
               <button 
                 type="submit"
-                className="w-full py-5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-black rounded-2xl shadow-xl shadow-primary/30 hover:shadow-primary/50 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-widest"
+                disabled={isSubmitting}
+                className="w-full py-5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-black rounded-2xl shadow-xl shadow-primary/30 hover:shadow-primary/50 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <span>Enviar Solución</span>
+                <span>{isSubmitting ? 'Enviando...' : 'Enviar Solución'}</span>
                 <Send size={20} />
               </button>
               
