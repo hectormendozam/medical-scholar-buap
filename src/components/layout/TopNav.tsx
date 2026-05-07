@@ -13,7 +13,7 @@ type NotificationRow = {
   created_at: string;
 };
 
-export function TopNav() {
+export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void }) {
   const { isTeacher } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -87,6 +87,9 @@ export function TopNav() {
   return (
     <header className="fixed top-0 right-0 left-64 h-16 bg-background/80 backdrop-blur-xl border-b border-outline-variant/15 flex items-center justify-between px-8 z-30">
       <div className="flex items-center gap-8">
+        <button onClick={() => setMobileOpen?.(true)} className="lg:hidden p-2 rounded-md bg-surface-container-low">
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </button>
         <h2 className="text-lg font-serif font-bold text-primary tracking-tight">BUAP Medical Scholar</h2>
         
         <nav className="hidden lg:flex items-center gap-6">
