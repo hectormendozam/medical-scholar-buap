@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
 import { CasoClinico } from '../types';
 
 const notifications = [
@@ -15,25 +16,169 @@ const notifications = [
 
 export function Dashboard() {
   const navigate = useNavigate();
+  const { isTeacher } = useAuth();
+  const { userId } = useAuth();
   const [assignedCases, setAssignedCases] = useState<CasoClinico[]>([]);
+  const [totalSubmissions, setTotalSubmissions] = useState(0);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [gradedCount, setGradedCount] = useState(0);
+  const [passRate, setPassRate] = useState(0);
+  const [weeklyProgress, setWeeklyProgress] = useState({ percent: 0, resolved: 0, target: 10 });
+  const [profileName, setProfileName] = useState<string | null>(null);
+  const [quickNotes, setQuickNotes] = useState<any[]>([]);
+  const [newNote, setNewNote] = useState('');
+  const [targetType, setTargetType] = useState<'global'|'case'|'course'>('global');
+  const [casesList, setCasesList] = useState<any[]>([]);
+  const [coursesList, setCoursesList] = useState<any[]>([]);
+  const [selectedCase, setSelectedCase] = useState<number | null>(null);
+  const [selectedCourse, setSelectedCourse] = useState<number | null>(null);
 
   useEffect(() => {
     async function fetchCases() {
-      const { data } = await supabase.from('casos_clinicos').select('*').limit(4);
-      if (data) setAssignedCases(data);
+      let res = await supabase.from('casos_clinicos').select('*').limit(4);
+      if (!res.data || res.error) {
+        res = await supabase.from('clinical_cases').select('*').limit(4);
+      }
+
+      if (res.data) {
+        const normalized = (res.data as any[]).map((r) => ({
+          id: r.id != null ? String(r.id) : '',
+          titulo: r.titulo ?? r.title ?? '',
+          categoria: r.categoria ?? r.category ?? null,
+          nombre_paciente: r.nombre_paciente ?? null,
+          estatus: r.estatus ?? r.status ?? 'borrador',
+          created_at: r.created_at ?? r.published_at ?? null,
+          __raw: r,
+        }));
+        setAssignedCases(normalized as unknown as CasoClinico[]);
+      }
     }
     fetchCases();
+  // fetch metrics and notifications
+    (async () => {
+      try {
+        if (!userId) return;
+
+        if (isTeacher) {
+          // get cases created by teacher
+          const { data: casesData } = await (supabase.from as any)('clinical_cases').select('id').eq('created_by', userId);
+          const caseIds = (casesData || []).map((c: any) => c.id);
+
+          // total submissions for those cases
+          const { count: total } = await (supabase.from as any)('resoluciones').select('id', { count: 'exact', head: true }).in('case_id', caseIds.length ? caseIds : [-1]);
+          const { count: graded } = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).eq('instructor_id', userId);
+          const passing = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).eq('instructor_id', userId).gte('calificacion', 6);
+          const passingCount = passing.count ?? 0;
+
+          const totalNum = total ?? 0;
+          const gradedNum = graded ?? 0;
+          setTotalSubmissions(totalNum);
+          setGradedCount(gradedNum);
+          setPendingCount(Math.max(0, totalNum - gradedNum));
+          setPassRate(gradedNum > 0 ? Math.round((passingCount / gradedNum) * 100) : 0);
+
+          // weekly: evaluations by this instructor in last 7 days
+          const { count: weekly } = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).eq('instructor_id', userId).gte('created_at', new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
+          const weeklyNum = weekly ?? 0;
+          const target = 10;
+          setWeeklyProgress({ percent: Math.min(100, Math.round((weeklyNum / target) * 100)), resolved: weeklyNum, target });
+        } else {
+          // student metrics
+          const { count: total } = await (supabase.from as any)('resoluciones').select('id', { count: 'exact', head: true }).eq('estudiante_id', userId);
+          const { data: evals } = await (supabase.from as any)('resoluciones').select('*, evaluaciones ( calificacion )').eq('estudiante_id', userId);
+          const totalNum = total ?? 0;
+          const gradedNum = (evals || []).filter((r: any) => r.evaluaciones && r.evaluaciones.length > 0).length;
+          const passingCount = (evals || []).filter((r: any) => r.evaluaciones && r.evaluaciones[0]?.calificacion >= 6).length;
+          setTotalSubmissions(totalNum);
+          setGradedCount(gradedNum);
+          setPendingCount(Math.max(0, totalNum - gradedNum));
+          setPassRate(gradedNum > 0 ? Math.round((passingCount / gradedNum) * 100) : 0);
+
+          // weekly: evaluations for student's submissions in last 7 days
+          const { count: weekly } = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).gte('created_at', new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
+          const weeklyNum = weekly ?? 0;
+          const target = 5;
+          setWeeklyProgress({ percent: Math.min(100, Math.round((weeklyNum / target) * 100)), resolved: weeklyNum, target });
+        }
+
+  // notifications for current user
+  const { data: notes } = await (supabase.from as any)('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(5);
+  // fetch small lists for targeting
+  const { data: c } = await (supabase.from as any)('clinical_cases').select('id, title').limit(50);
+  const { data: cr } = await (supabase.from as any)('courses').select('id, name').limit(50);
+  setCasesList((c as any[]) ?? []);
+  setCoursesList((cr as any[]) ?? []);
+        setQuickNotes((notes as any[]) ?? []);
+      } catch (err) {
+        console.warn('dashboard metrics error', err);
+      }
+    })();
+    // fetch profile name for greeting
+    (async () => {
+      try {
+        if (!userId) return;
+        const { data } = await (supabase.from as any)('profiles').select('full_name').eq('id', userId).single();
+        if (data && data.full_name) setProfileName(data.full_name);
+      } catch (err) {
+        console.warn('profile fetch error', err);
+      }
+    })();
   }, []);
+
+  const markAsRead = async (id: number) => {
+    try {
+      await (supabase.from as any)('notifications').update({ is_read: true }).eq('id', id);
+      setQuickNotes((qs) => qs.map((q) => q.id === id ? { ...q, is_read: true } : q));
+    } catch (err) {
+      console.warn('mark read error', err);
+    }
+  };
+
+  const createQuickNote = async () => {
+    if (!newNote || !userId) return;
+    try {
+      const payload: any = { title: 'Nota rápida', message: newNote };
+      if (targetType === 'case' && selectedCase) {
+        payload.case_id = selectedCase;
+        payload.user_id = userId; // still target a specific user for case (author)
+      }
+      if (targetType === 'global') {
+        payload.user_id = userId;
+      }
+      if (targetType === 'course' && selectedCourse) {
+        // For course broadcasts we intentionally omit user_id so the DB trigger distributes to members
+        payload.course_id = selectedCourse;
+      }
+      // Insert without .single() because the trigger may create multiple rows; do not assume single returned row
+      await (supabase.from as any)('notifications').insert(payload);
+      // refresh latest notifications for the user
+      const { data: fresh } = await (supabase.from as any)('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(5);
+      setQuickNotes((fresh as any[]) ?? []);
+      setNewNote('');
+    } catch (err) {
+      console.warn('create note error', err);
+      alert('Error creando notificación');
+    }
+  };
 
   return (
     <div className="space-y-10">
       {/* Header Section */}
       <section>
-        <h1 className="text-4xl font-serif font-bold text-on-background tracking-tight">Panel del Estudiante</h1>
-        <p className="text-secondary mt-2 flex items-center gap-2">
-          <GraduationCap size={18} className="text-primary" />
-          Bienvenido, Dr. Alejandro Ortiz. Revisa tus asignaciones clínicas de hoy.
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-4xl font-serif font-bold text-on-background tracking-tight">{isTeacher ? 'Panel del Maestro' : 'Panel del Estudiante'}</h1>
+              <p className="text-secondary mt-2 flex items-center gap-2">
+                <GraduationCap size={18} className="text-primary" />
+                {profileName ? `Bienvenido, ${profileName}. Revisa tus asignaciones clínicas de hoy.` : 'Bienvenido. Revisa tus asignaciones clínicas de hoy.'}
+              </p>
+          </div>
+          {isTeacher && (
+            <button onClick={() => navigate('/casos/nuevo')} className="px-4 py-2 bg-primary text-white rounded-xl shadow">
+              + Nuevo Caso
+            </button>
+          )}
+        </div>
       </section>
 
       {/* Top Grid */}
@@ -49,20 +194,48 @@ export function Dashboard() {
           </div>
           
           <div className="space-y-4">
-            {notifications.map((n) => (
+            <div className="flex gap-2 items-center">
+              <input value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="Escribe una nota rápida..." className="flex-1 p-3 rounded-lg bg-surface-container-low outline-none" />
+              <select value={targetType} onChange={(e) => setTargetType(e.target.value as any)} className="p-2 border rounded">
+                <option value="global">Global</option>
+                <option value="case">Caso</option>
+                <option value="course">Grupo/Curso</option>
+              </select>
+              {targetType === 'case' && (
+                <select value={selectedCase ?? ''} onChange={(e) => setSelectedCase(e.target.value ? Number(e.target.value) : null)} className="p-2 border rounded">
+                  <option value="">Selecciona caso</option>
+                  {casesList.map((c) => (
+                    <option key={c.id} value={c.id}>{c.title ?? c.titulo ?? c.name}</option>
+                  ))}
+                </select>
+              )}
+              {targetType === 'course' && (
+                <select value={selectedCourse ?? ''} onChange={(e) => setSelectedCourse(e.target.value ? Number(e.target.value) : null)} className="p-2 border rounded">
+                  <option value="">Selecciona grupo</option>
+                  {coursesList.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              )}
+              <button onClick={createQuickNote} className="px-4 py-2 bg-primary text-white rounded-lg">Enviar</button>
+            </div>
+            {quickNotes.map((n) => (
               <div key={n.id} className="flex gap-4 items-start p-4 hover:bg-surface-container-low rounded-xl transition-all cursor-pointer group">
                 <div className={cn(
-                  "w-2.5 h-2.5 rounded-full mt-2 flex-shrink-0 animate-pulse",
-                  n.type === 'primary' ? "bg-primary" : "bg-tertiary"
+                  "w-2.5 h-2.5 rounded-full mt-2 flex-shrink-0",
+                  n.is_read ? "bg-surface-container-high" : "bg-primary"
                 )} />
                 <div className="flex-1">
-                  <p className="font-semibold text-on-background group-hover:text-primary transition-colors">{n.text}</p>
+                  <p className="font-semibold text-on-background group-hover:text-primary transition-colors">{n.title}: {n.message}</p>
                   <p className="text-xs text-secondary mt-1 flex items-center gap-2">
                     <Clock size={12} />
-                    {n.time} • {n.author}
+                    {new Date(n.created_at).toLocaleString()}
                   </p>
                 </div>
-                <ChevronRight size={16} className="text-outline my-auto" />
+                <div className="flex flex-col gap-2 items-end">
+                  {!n.is_read && <button onClick={() => markAsRead(n.id)} className="text-xs text-primary underline">Marcar leído</button>}
+                  <ChevronRight size={16} className="text-outline my-auto" />
+                </div>
               </div>
             ))}
           </div>
@@ -72,21 +245,21 @@ export function Dashboard() {
         <div className="bg-primary bg-gradient-to-br from-primary to-primary-container text-on-primary rounded-2xl p-8 shadow-xl shadow-primary/20 flex flex-col justify-between">
           <div>
             <h3 className="font-label text-xs uppercase tracking-widest font-bold opacity-80 mb-6">Progreso Semanal</h3>
-            <div className="text-6xl font-serif font-bold tabular-nums">84%</div>
+            <div className="text-6xl font-serif font-bold tabular-nums">{weeklyProgress.percent}%</div>
           </div>
           
           <div className="space-y-4">
             <div className="flex justify-between text-xs font-label font-bold uppercase tracking-wider">
               <span>Casos Resueltos</span>
-              <span className="opacity-80">12 / 15</span>
+              <span className="opacity-80">{weeklyProgress.resolved} / {weeklyProgress.target}</span>
             </div>
             <div className="w-full bg-white/20 h-2 rounded-full overflow-hidden backdrop-blur-sm">
-              <motion.div 
-                initial={{ width: 0 }}
-                animate={{ width: '84%' }}
-                transition={{ duration: 1, ease: "easeOut" }}
-                className="bg-white h-full shadow-[0_0_10px_rgba(255,255,255,0.5)]" 
-              />
+                <motion.div 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${weeklyProgress.percent}%` }}
+                  transition={{ duration: 1, ease: "easeOut" }}
+                  className="bg-white h-full shadow-[0_0_10px_rgba(255,255,255,0.5)]" 
+                />
             </div>
           </div>
         </div>

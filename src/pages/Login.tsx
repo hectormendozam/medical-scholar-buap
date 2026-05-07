@@ -1,14 +1,32 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { supabase } from '../lib/supabase';
 import { useNavigate } from 'react-router-dom';
-import { School, UserCircle, Lock, Eye, ArrowRight, MousePointer2, Stethoscope, Laptop } from 'lucide-react';
+import { School, UserCircle, Lock, Eye, EyeOff, ArrowRight, MousePointer2, Stethoscope, Laptop } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export function Login() {
   const navigate = useNavigate();
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    navigate('/dashboard');
+    (async () => {
+      try {
+        const form = e.target as HTMLFormElement;
+        // extract email/password from inputs
+        const email = (form.querySelector('input[type=email]') as HTMLInputElement).value;
+        const password = (form.querySelector('input[type=password]') as HTMLInputElement).value;
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) {
+          alert('Error al iniciar sesión: ' + error.message);
+        } else {
+          navigate('/dashboard');
+        }
+      } catch (err: any) {
+        console.error(err);
+        alert('Error al iniciar sesión.');
+      }
+    })();
   };
 
   return (
@@ -98,13 +116,18 @@ export function Login() {
                   <Lock className="text-outline group-focus-within:text-primary transition-colors" size={20} />
                 </div>
                 <input 
-                  type="password" 
+                  type={showPassword ? 'text' : 'password'} 
                   placeholder="••••••••••••"
                   className="block w-full pl-12 pr-12 py-4 bg-surface-container-lowest border-0 ring-1 ring-outline-variant/30 rounded-xl focus:ring-2 focus:ring-primary focus:bg-white transition-all outline-none text-on-surface"
                   required
                 />
-                <button type="button" className="absolute inset-y-0 right-0 pr-4 flex items-center text-outline hover:text-primary transition-colors">
-                  <Eye size={20} />
+                <button
+                  type="button"
+                  aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                  onClick={() => setShowPassword((s) => !s)}
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-outline hover:text-primary transition-colors"
+                >
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
               </div>
             </div>
@@ -126,6 +149,9 @@ export function Login() {
               <span>Iniciar Sesión Académica</span>
               <ArrowRight size={20} />
             </button>
+            <div className="mt-3 text-center">
+              <a href="/register" className="text-sm font-semibold text-primary hover:text-primary-container transition-colors">Registrar como estudiante</a>
+            </div>
           </form>
 
           <div className="mt-12 pt-8 border-t border-outline-variant/20">

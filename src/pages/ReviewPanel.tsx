@@ -24,35 +24,129 @@ type Resolucion = Database['public']['Tables']['resoluciones']['Row'] & {
   evaluaciones?: { calificacion: number }[] | null;
 };
 
-const stats = [
-  { label: 'Total Entregas', value: '42', progress: 100, color: 'primary' },
-  { label: 'Pendientes', value: '12', progress: 28, color: 'red' },
-  { label: 'Calificadas', value: '30', progress: 72, color: 'primary' },
-  { label: 'Tasa de Aprobación', value: '92%', progress: 92, color: 'amber' },
+// stats will be computed from fetched data; start with zeros until data loads
+const statsTemplate = [
+  { label: 'Total Entregas', value: 0, progress: 0, color: 'primary' },
+  { label: 'Pendientes', value: 0, progress: 0, color: 'red' },
+  { label: 'Calificadas', value: 0, progress: 0, color: 'primary' },
+  { label: 'Tasa de Aprobación', value: '0%', progress: 0, color: 'amber' },
 ];
 
 export function ReviewPanel() {
   const [entregas, setEntregas] = React.useState<Resolucion[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [selected, setSelected] = React.useState<Resolucion | null>(null);
+  const [grade, setGrade] = React.useState<number | ''>('');
+  const [feedback, setFeedback] = React.useState<string>('');
+  const [saving, setSaving] = React.useState(false);
+  const [userId, setUserId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     async function fetchEntregas() {
-      // Intentamos traer las resoluciones y sus perfiles relacionados si existen
-      const { data, error } = await supabase
-        .from('resoluciones')
-        .select(`
-          *,
-          evaluaciones ( calificacion )
-        `)
-        .order('fecha_entrega', { ascending: false });
+      // Try fetching 'resoluciones' (spanish) first, fallback to 'case_resolutions' (english) if not present
+      const tryTables = [
+        { name: 'resoluciones', select: `*, evaluaciones ( calificacion )`, orderBy: 'fecha_entrega' },
+        { name: 'case_resolutions', select: `*, evaluations ( total_score as calificacion )`, orderBy: 'created_at' }
+      ];
 
-      if (data) {
-        setEntregas(data as Resolucion[]);
+      for (const t of tryTables) {
+        try {
+          const { data, error } = await (supabase.from as any)(t.name).select(t.select).order(t.orderBy, { ascending: false });
+          if (error) {
+            // if table doesn't exist or permission denied, continue to next
+            console.warn(`fetch ${t.name} error`, error.message || error);
+            continue;
+          }
+          if (data && (data as any[]).length > 0) {
+            // normalize shape when using english table
+            let normalized = data as any[];
+            if (t.name === 'case_resolutions') {
+              normalized = normalized.map((r) => ({
+                ...r,
+                id: r.id,
+                fecha_entrega: r.created_at,
+                evaluaciones: (r.evaluations || []).map((ev: any) => ({ calificacion: ev.total_score }))
+              }));
+            }
+            setEntregas(normalized as Resolucion[]);
+            setSelected((normalized as Resolucion[])[0]);
+            break;
+          }
+        } catch (err) {
+          console.warn('fetch fallback error', err);
+        }
       }
       setLoading(false);
     }
     fetchEntregas();
+
+    // get current user id
+    (async () => {
+      const { data: userData } = await supabase.auth.getUser();
+      // supabase.auth.getUser() returns { data: { user } }
+      // handle both shapes safely
+      const user = (userData as any)?.user ?? (userData as any);
+      setUserId(user?.id ?? null);
+    })();
   }, []);
+
+  // when selecting a resolution, try to load existing evaluation
+  React.useEffect(() => {
+    if (!selected) return;
+    (async () => {
+      try {
+        const { data } = await (supabase.from as any)('evaluaciones').select('*').eq('resolucion_id', selected.id).limit(1).single();
+        if (data) {
+          setGrade(data.calificacion ?? '');
+          setFeedback(data.retroalimentacion ?? '');
+        } else {
+          setGrade('');
+          setFeedback('');
+        }
+      } catch (err) {
+        console.warn('could not load evaluation', err);
+        setGrade('');
+        setFeedback('');
+      }
+    })();
+  }, [selected]);
+
+  const handleSelect = (r: Resolucion) => {
+    setSelected(r);
+  };
+
+  const saveEvaluation = async () => {
+    if (!selected || !userId) return alert('Selecciona una entrega');
+    setSaving(true);
+    const payload: any = {
+      resolucion_id: selected.id,
+      instructor_id: userId,
+      calificacion: typeof grade === 'number' ? grade : null,
+      retroalimentacion: feedback,
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      // try update existing evaluation by this instructor for this resolution
+      const { data: existing } = await (supabase.from as any)('evaluaciones').select('*').eq('resolucion_id', selected.id).eq('instructor_id', userId).limit(1).single();
+      let res;
+      if (existing) {
+        res = await (supabase.from as any)('evaluaciones').update(payload).eq('id', existing.id).select().single();
+      } else {
+        res = await (supabase.from as any)('evaluaciones').insert(payload).select().single();
+      }
+      if (res.error) throw res.error;
+      alert('Calificación guardada');
+      // refresh deliveries list
+      const { data: refreshed } = await supabase.from('resoluciones').select(`*, evaluaciones ( calificacion )`).order('fecha_entrega', { ascending: false });
+      setEntregas(refreshed as Resolucion[]);
+    } catch (err: any) {
+      console.error('save evaluation error', err);
+      alert('Error guardando calificación: ' + (err?.message ?? JSON.stringify(err)));
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <div className="flex-1 flex flex-col gap-10">
       <div className="flex-1 flex gap-10">
@@ -84,24 +178,39 @@ export function ReviewPanel() {
 
           {/* Stats Grid */}
           <div className="grid grid-cols-4 gap-6">
-            {stats.map((s, i) => (
-              <div key={i} className="bg-white p-6 rounded-2xl border border-outline-variant/10 shadow-sm flex flex-col gap-4">
-                <span className="text-[10px] font-label font-black text-secondary uppercase tracking-widest">{s.label}</span>
-                <span className={cn(
-                  "text-3xl font-serif font-black",
-                  s.color === 'red' ? "text-red-600" : s.color === 'amber' ? "text-amber-600" : "text-on-background"
-                )}>{s.value}</span>
-                <div className="h-1 bg-surface-container rounded-full overflow-hidden">
-                   <div 
-                    className={cn(
-                      "h-full rounded-full transition-all duration-1000",
-                      s.color === 'red' ? "bg-red-600" : s.color === 'amber' ? "bg-amber-600" : "bg-primary"
-                    )} 
-                    style={{ width: `${s.progress}%` }} 
-                   />
+            {(() => {
+              // compute stats from entregas
+              const total = entregas.length;
+              const graded = entregas.filter((e) => e.evaluaciones && e.evaluaciones.length > 0).length;
+              const pending = Math.max(0, total - graded);
+              const passCount = entregas.filter((e) => e.evaluaciones && e.evaluaciones[0]?.calificacion >= 6).length;
+              const passRate = graded > 0 ? Math.round((passCount / graded) * 100) : 0;
+              const stats = [
+                { label: 'Total Entregas', value: total, progress: total > 0 ? 100 : 0, color: 'primary' },
+                { label: 'Pendientes', value: pending, progress: total > 0 ? Math.round((pending / Math.max(1, total)) * 100) : 0, color: 'red' },
+                { label: 'Calificadas', value: graded, progress: total > 0 ? Math.round((graded / Math.max(1, total)) * 100) : 0, color: 'primary' },
+                { label: 'Tasa de Aprobación', value: `${passRate}%`, progress: passRate, color: 'amber' },
+              ];
+
+              return stats.map((s, i) => (
+                <div key={i} className="bg-white p-6 rounded-2xl border border-outline-variant/10 shadow-sm flex flex-col gap-4">
+                  <span className="text-[10px] font-label font-black text-secondary uppercase tracking-widest">{s.label}</span>
+                  <span className={cn(
+                    "text-3xl font-serif font-black",
+                    s.color === 'red' ? "text-red-600" : s.color === 'amber' ? "text-amber-600" : "text-on-background"
+                  )}>{s.value}</span>
+                  <div className="h-1 bg-surface-container rounded-full overflow-hidden">
+                     <div 
+                      className={cn(
+                        "h-full rounded-full transition-all duration-1000",
+                        s.color === 'red' ? "bg-red-600" : s.color === 'amber' ? "bg-amber-600" : "bg-primary"
+                      )} 
+                      style={{ width: `${s.progress}%` }} 
+                     />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
 
           {/* Submissions Table */}
@@ -176,17 +285,17 @@ export function ReviewPanel() {
               </tbody>
             </table>
             
-            <div className="p-6 bg-surface-container-low flex justify-between items-center border-t border-surface-container">
-               <span className="text-[10px] font-black text-outline uppercase tracking-wider">Mostrando 4 de 42 entregas</span>
-               <div className="flex gap-6">
-                  <button className="text-[10px] font-black uppercase tracking-widest text-outline hover:text-primary transition-colors flex items-center gap-2">
-                     <Users size={12} /> Anterior
-                  </button>
-                  <button className="text-[10px] font-black uppercase tracking-widest text-primary hover:text-primary-container transition-colors flex items-center gap-2">
-                     Siguiente <Users size={12} />
-                  </button>
-               </div>
-            </div>
+          <div className="p-6 bg-surface-container-low flex justify-between items-center border-t border-surface-container">
+          <span className="text-[10px] font-black text-outline uppercase tracking-wider">Mostrando {Math.min( (entregas || []).length, 50 )} de { (entregas || []).length } entregas</span>
+          <div className="flex gap-6">
+            <button className="text-[10px] font-black uppercase tracking-widest text-outline hover:text-primary transition-colors flex items-center gap-2">
+              <Users size={12} /> Anterior
+            </button>
+            <button className="text-[10px] font-black uppercase tracking-widest text-primary hover:text-primary-container transition-colors flex items-center gap-2">
+              Siguiente <Users size={12} />
+            </button>
+          </div>
+        </div>
           </div>
         </section>
 
@@ -253,8 +362,8 @@ export function ReviewPanel() {
                </div>
 
                <div className="pt-6 border-t border-outline-variant/10 space-y-4">
-                  <button className="w-full py-5 bg-primary text-on-primary font-black rounded-2xl shadow-xl shadow-primary/20 hover:shadow-primary/40 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-widest">
-                    <Save size={20} /> Publicar Calificación
+                  <button onClick={saveEvaluation} disabled={saving || (typeof grade === 'number' && (grade < 0 || grade > 10))} className="w-full py-5 bg-primary text-on-primary font-black rounded-2xl shadow-xl shadow-primary/20 hover:shadow-primary/40 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-widest disabled:opacity-60">
+                    <Save size={20} /> {saving ? 'Guardando...' : 'Publicar Calificación'}
                   </button>
                   <button className="w-full py-4 text-outline font-bold text-xs uppercase tracking-widest hover:bg-surface-container-highest rounded-xl transition-colors">
                     Guardar como Borrador

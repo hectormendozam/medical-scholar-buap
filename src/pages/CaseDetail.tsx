@@ -17,6 +17,8 @@ import {
 import { motion } from 'motion/react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { CaseChat } from '../components/CaseChat';
+import { useAuth } from '../context/AuthContext';
 import { CasoClinico } from '../types';
 
 export function CaseDetail() {
@@ -27,12 +29,35 @@ export function CaseDetail() {
   const [planTerapeutico, setPlanTerapeutico] = useState('');
   const [justificacion, setJustificacion] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { isTeacher, loading } = useAuth();
 
   useEffect(() => {
     async function fetchCase() {
       if (!id) return;
-      const { data } = await supabase.from('casos_clinicos').select('*').eq('id', id).single();
-      if (data) setCaso(data);
+      let res: any = await supabase.from('casos_clinicos').select('*').eq('id', id).single();
+      if (!res.data || res.error) {
+        res = await supabase.from('clinical_cases').select('*').eq('id', id).single();
+      }
+
+      if (res && res.data) {
+        const r: any = res.data;
+        const normalized = {
+          id: r.id != null ? String(r.id) : '',
+          titulo: r.titulo ?? r.title ?? '',
+          descripcion_inicial: r.descripcion_inicial ?? r.description ?? r.initial_information ?? null,
+          antecedentes: r.antecedentes ?? r.clinical_history ?? null,
+          sintomas: r.sintomas ?? r.symptoms ?? null,
+          nombre_paciente: r.nombre_paciente ?? null,
+          nivel: r.nivel ?? r.level ?? null,
+          tiempo_estimado: r.tiempo_estimado ?? r.time ?? null,
+          categoria: r.categoria ?? r.category ?? null,
+          estatus: r.estatus ?? r.status ?? 'borrador',
+          consejo_mentor: r.consejo_mentor ?? null,
+          created_at: r.created_at ?? r.published_at ?? null,
+          __raw: r,
+        } as unknown as CasoClinico;
+        setCaso(normalized);
+      }
     }
     fetchCase();
   }, [id]);
@@ -189,20 +214,36 @@ export function CaseDetail() {
               </div>
             </div>
 
-            <form className="p-8 space-y-8" onSubmit={async (e) => {
+            {loading ? (
+              <div className="p-8">Cargando perfil...</div>
+            ) : isTeacher ? (
+              <form className="p-8 space-y-8" onSubmit={async (e) => {
               e.preventDefault();
               if (!caso) return;
               setIsSubmitting(true);
-              const dummyEstudianteId = '00000000-0000-0000-0000-000000000001';
-              
-              const { error } = await supabase.from('resoluciones').insert({
-                estudiante_id: dummyEstudianteId,
+              const { data: userData } = await supabase.auth.getUser();
+              const userId = userData?.user?.id ?? null;
+
+              // Try Spanish table first, otherwise fallback to English-named table
+              let insertRes: any = await supabase.from('resoluciones').insert({
+                estudiante_id: userId,
                 caso_id: caso.id,
                 diagnostico,
                 plan_terapeutico: planTerapeutico,
                 justificacion,
                 estatus: 'En Revisión'
               } as any);
+
+              if (insertRes.error) {
+                insertRes = await supabase.from('case_resolutions').insert({
+                  case_id: caso.__raw?.id ?? caso.id,
+                  resolved_by: userId,
+                  resolution: diagnostico + '\n\nPlan:\n' + planTerapeutico,
+                  conclusion: justificacion
+                } as any);
+              }
+
+              const error = insertRes.error;
               
               setIsSubmitting(false);
               if (!error) {
@@ -269,6 +310,22 @@ export function CaseDetail() {
                 Al enviar, su respuesta será evaluada por el cuerpo docente.
               </p>
             </form>
+          ) : (
+            <div className="p-8">
+              <h3 className="text-lg font-bold mb-2">Participación restringida</h3>
+              <p className="text-sm text-secondary mb-4">Como estudiante puedes ver el caso y enviar propuestas de resolución a través del flujo de actividades, pero no tienes permisos para publicar o calificar resoluciones directamente en esta pantalla.</p>
+              <div className="flex gap-3">
+                <button onClick={() => navigate('/casos')} className="px-4 py-2 rounded-xl bg-primary text-white">Volver a Casos</button>
+              </div>
+            </div>
+          )}
+          </div>
+
+          {/* Chat area inserted below decision panel */}
+          <div>
+            <div className="bg-white rounded-2xl p-4 border border-outline-variant/10 shadow-sm">
+              <CaseChat caseId={caso.__raw?.id ?? caso.id} />
+            </div>
           </div>
 
           {/* Hint Card */}

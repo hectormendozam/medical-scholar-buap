@@ -2,15 +2,39 @@ import { Stethoscope, Filter, Search, ChevronRight, Clock, Star } from 'lucide-r
 import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
 import { CasoClinico } from '../types';
 
 export default function ClinicalCases() {
+  const { isTeacher } = useAuth();
   const [cases, setCases] = useState<CasoClinico[]>([]);
 
   useEffect(() => {
     async function fetchCases() {
-      const { data, error } = await supabase.from('casos_clinicos').select('*');
-      if (data) setCases(data);
+      // Try the Spanish-named table first, fall back to the English one used in your Supabase dump
+      let res = await supabase.from('casos_clinicos').select('*');
+      if (!res.data || res.error) {
+        // fallback to English table structure
+        res = await supabase.from('clinical_cases').select('*');
+      }
+
+      if (res.data) {
+        // Normalize records so the UI can rely on the original field names used in the app
+        const normalized = (res.data as any[]).map((r) => ({
+          id: r.id != null ? String(r.id) : '',
+          titulo: r.titulo ?? r.title ?? '',
+          categoria: r.categoria ?? r.category ?? null,
+          nivel: r.nivel ?? r.level ?? null,
+          tiempo_estimado: r.tiempo_estimado ?? r.time ?? null,
+          estatus: r.estatus ?? r.status ?? 'borrador',
+          created_at: r.created_at ?? r.published_at ?? null,
+          // keep the original full object available if needed
+          __raw: r,
+        }));
+
+        // Cast to the expected front-end tipo (partial) — we only use some fields in the list
+        setCases(normalized as unknown as CasoClinico[]);
+      }
     }
     fetchCases();
   }, []);
@@ -23,6 +47,9 @@ export default function ClinicalCases() {
           <p className="text-stone-500 mt-2">Explora y resuelve desafíos clínicos reales para tu formación.</p>
         </div>
         <div className="flex gap-3">
+          {isTeacher && (
+            <button onClick={() => (window.location.href = '/casos/nuevo')} className="px-4 py-2 bg-primary text-white rounded-xl">+ Nuevo Caso</button>
+          )}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 w-4 h-4" />
             <input 

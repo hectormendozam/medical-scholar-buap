@@ -1,4 +1,5 @@
 import { cn } from '../lib/utils';
+import { useAuth } from '../context/AuthContext';
 import { 
   LayoutDashboard as DashboardIcon, 
   Stethoscope as MedicalIcon, 
@@ -11,7 +12,7 @@ import {
 import { Link, useLocation } from 'react-router-dom';
 
 const navItems = [
-  { icon: DashboardIcon, label: 'Dashboard', path: '/dashboard' },
+  { icon: DashboardIcon, label: 'Menú Principal', path: '/dashboard' },
   { icon: MedicalIcon, label: 'Casos Clínicos', path: '/casos' },
   { icon: FolderIcon, label: 'Expedientes', path: '/expedientes' },
   { icon: LayoutGrid, label: 'Revisiones', path: '/revisiones' },
@@ -21,6 +22,7 @@ const navItems = [
 
 export function Sidebar() {
   const location = useLocation();
+  const { isTeacher } = useAuth();
 
   return (
     <aside className="fixed left-0 top-0 h-full w-64 bg-stone-100 dark:bg-surface border-r border-outline-variant flex flex-col p-4 z-40">
@@ -51,15 +53,17 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="mt-auto px-2 pb-4">
-        <Link 
-          to="/casos/nuevo"
-          className="w-full py-3 px-4 bg-gradient-to-r from-primary to-primary-container text-white rounded-2xl font-semibold flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:opacity-90 active:scale-95 transition-all duration-150"
-        >
-          <PlusIcon className="w-5 h-5" />
-          <span>Nuevo Caso</span>
-        </Link>
-      </div>
+      {isTeacher && (
+        <div className="mt-auto px-2 pb-4">
+          <Link 
+            to="/casos/nuevo"
+            className="w-full py-3 px-4 bg-gradient-to-r from-primary to-primary-container text-white rounded-2xl font-semibold flex items-center justify-center gap-2 shadow-lg shadow-primary/20 hover:opacity-90 active:scale-95 transition-all duration-150"
+          >
+            <PlusIcon className="w-5 h-5" />
+            <span>Nuevo Caso</span>
+          </Link>
+        </div>
+      )}
     </aside>
   );
 }

@@ -1,0 +1,3 @@
+id,case_id,uploaded_by,file_name,file_url,file_type,created_at
+1,1,22222222-2222-2222-2222-222222222222,rx_torax.jpg,https://via.placeholder.com/800x600.png?text=RX,imagen,2026-05-07T00:00:00Z
+2,2,22222222-2222-2222-2222-222222222222,labs.pdf,https://example.com/sample-labs.pdf,otro,2026-05-07T00:00:00Z

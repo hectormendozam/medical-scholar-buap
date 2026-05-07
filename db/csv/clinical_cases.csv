@@ -1,0 +1,3 @@
+id,title,description,initial_information,clinical_history,symptoms,status,created_by,published_at,created_at,updated_at
+3,"Infarto Agudo de Miocardio","Paciente con dolor torácico intenso","TA 140/90, FC 110","HTA, tabaquismo","Dolor torácico opresivo irradiado a brazo izquierdo","publicado","22222222-2222-2222-2222-222222222222","2026-05-07T00:00:00Z","2026-05-07T00:00:00Z","2026-05-07T00:00:00Z"
+4,"Shock Hipovolémico","Paciente con pérdida de volumen","TA baja, palidez","Antecedente de hemorragia","Mareo, síncope","publicado","22222222-2222-2222-2222-222222222222","2026-05-07T00:00:00Z","2026-05-07T00:00:00Z","2026-05-07T00:00:00Z"

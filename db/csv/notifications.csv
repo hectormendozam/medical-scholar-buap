@@ -1,0 +1,2 @@
+id,user_id,case_id,title,message,is_read,created_at
+1,33333333-3333-3333-3333-000000000001,1,'Nuevo caso asignado','Revisa el caso asignado en tu curso',false,2026-05-07T00:00:00Z

@@ -7,6 +7,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/layout/Layout';
 import { Login } from './pages/Login';
+import Register from './pages/Register';
 import { Dashboard } from './pages/Dashboard';
 import { CaseDetail } from './pages/CaseDetail';
 import { ReviewPanel } from './pages/ReviewPanel';
@@ -14,14 +15,17 @@ import ClinicalCases from './pages/ClinicalCases';
 import Files from './pages/Files';
 import NewCase from './pages/NewCase';
 import Profile from './pages/Profile';
+import MyGrades from './pages/MyGrades';
 import Notificaciones from './pages/Notificaciones';
+import Gestion from './pages/Gestion';
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Navigate to="/login" replace />} />
-        <Route path="/login" element={<Login />} />
+  <Route path="/login" element={<Login />} />
+  <Route path="/register" element={<Register />} />
 
         <Route element={<Layout />}>
           {/* Dashboard */}
@@ -41,6 +45,12 @@ export default function App() {
 
           {/* Notificaciones */}
           <Route path="notificaciones" element={<Notificaciones />} />
+
+          {/* Gestión */}
+          <Route path="gestion" element={<Gestion />} />
+
+          {/* Mis calificaciones (estudiante) */}
+          <Route path="mis-calificaciones" element={<MyGrades />} />
 
           {/* Perfil / Configuración */}
           <Route path="configuracion" element={<Profile />} />
