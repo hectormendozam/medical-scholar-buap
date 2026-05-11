@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 
 interface Message {
   id: string;
-  case_id: number | string;
+  case_id: number;
   user_id: string | null;
   message: string;
   created_at: string;
@@ -26,6 +26,10 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
   const [participants, setParticipants] = useState<Array<{ id: string; full_name?: string | null; avatar_url?: string | null }>>([]);
   const [typingUsers, setTypingUsers] = useState<Array<{ user_id: string; user_name?: string; last_typing_at: string }>>([]);
 
+  // Normalize caseId to a number when possible. Many projects use numeric case ids,
+  // and Supabase realtime filters and .eq comparisons are sensitive to type.
+  const numericCaseId = typeof caseId === 'string' && /^\d+$/.test(caseId) ? Number(caseId) : caseId;
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getUser();
@@ -35,15 +39,33 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
 
     let mounted = true;
     // initial load: fetch most recent pageSize messages (descending), then reverse to show oldest->newest
-    async function loadRecent() {
+  async function loadRecent() {
       try {
-        const { data } = await (supabase.from as any)('chat_messages')
-          .select('id, case_id, user_id, message, created_at, profiles(id, full_name, avatar_url), message_attachments(id, file_name, file_url, file_type, size)')
-          .eq('case_id', caseId)
+        // try join with related profiles and attachments using explicit aliases
+        const { data, error } = await (supabase.from as any)('chat_messages')
+          .select('id, case_id, user_id, message, created_at, profiles:profiles(id, full_name, avatar_url), message_attachments:message_attachments(id, file_name, file_url, file_type, size)')
+          .eq('case_id', numericCaseId as any)
           .order('created_at', { ascending: false })
           .limit(pageSize as any);
+
+        if (error) {
+          console.warn('primary load (joined) failed, falling back:', error.message || error);
+        }
+
+        let rows = (data || []) as any[];
+
+        // fallback: try a simple select if joined select failed or returned empty
+        if ((!rows || rows.length === 0) && (!data || error)) {
+          const { data: fallback, error: fallbackErr } = await (supabase.from as any)('chat_messages')
+            .select('id, case_id, user_id, message, created_at')
+            .eq('case_id', numericCaseId as any)
+            .order('created_at', { ascending: false })
+            .limit(pageSize as any);
+          if (fallbackErr) throw fallbackErr;
+          rows = (fallback || []) as any[];
+        }
+
         if (!mounted) return;
-        const rows = (data || []) as any[];
         const normalized = rows.map((d: any) => ({
           id: String(d.id),
           case_id: d.case_id,
@@ -53,32 +75,49 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
           user_name: d.profiles?.full_name ?? null,
           attachments: (d.message_attachments || []).map((a: any) => ({ id: a.id, file_name: a.file_name, file_url: a.file_url, file_type: a.file_type, size: a.size })),
         })).reverse();
+
         setMessages(normalized);
         setHasMore(rows.length === pageSize);
-        // load participants
+
+        // build participants list from distinct user_ids and then fetch profiles in one query
         try {
-          const { data: parts } = await (supabase.from as any)('chat_messages').select('profiles(id, full_name, avatar_url)').eq('case_id', caseId).limit(200);
-          const unique: Record<string, any> = {};
-          (parts || []).forEach((p: any) => { if (p.profiles) unique[p.profiles.id] = p.profiles; });
-          setParticipants(Object.values(unique));
-        } catch (err) { /* ignore participant errors */ }
+          const ids = Array.from(new Set(normalized.map(m => m.user_id).filter(Boolean)));
+          if (ids.length > 0) {
+            const { data: profs } = await (supabase.from as any)('profiles').select('id, full_name, avatar_url').in('id', ids).limit(200);
+            const profsArr = (profs || []) as any[];
+            setParticipants(profsArr);
+            // update any messages that lack user_name using fetched profiles
+            const byId: Record<string, any> = {};
+            profsArr.forEach(p => { byId[p.id] = p; });
+            setMessages((prev) => prev.map(m => ({ ...m, user_name: (m.user_id && byId[m.user_id]) ? byId[m.user_id].full_name : m.user_name })));
+          } else {
+            setParticipants([]);
+          }
+        } catch (err) {
+          console.warn('participants fetch failed', err);
+        }
       } catch (err) {
         console.warn('load chat error', err);
       }
     }
     loadRecent();
 
-    const subscription = supabase.channel(`public:chat_messages:${caseId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `case_id=eq.${caseId}` }, (payload) => {
+        const subscription = supabase.channel(`public:chat_messages:${numericCaseId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `case_id=eq.${numericCaseId}` }, (payload) => {
         const d: any = payload.new;
         const normalized = { id: String(d.id), case_id: d.case_id, user_id: d.user_id, message: d.message, created_at: d.created_at, user_name: d.profiles?.full_name ?? null, attachments: [] };
         setMessages((m) => [...m, normalized]);
-        // update participants list
-        if (d.user_id && !participants.find(p => p.id === d.user_id)) {
+        // update participants list using functional update to avoid stale closures
+        if (d.user_id) {
           (async () => {
             try {
               const { data: prof } = await (supabase.from as any)('profiles').select('id, full_name, avatar_url').eq('id', d.user_id).limit(1).single();
-              if (prof) setParticipants(prev => [...prev, prof]);
+              if (prof) {
+                setParticipants((prev) => {
+                  if (prev.find(p => p.id === prof.id)) return prev;
+                  return [...prev, prof];
+                });
+              }
             } catch (e) { /* ignore */ }
           })();
         }
@@ -86,8 +125,8 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
       .subscribe();
 
     // subscribe to typing state
-    const typingChannel = supabase.channel(`public:chat_typing:${caseId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_typing', filter: `case_id=eq.${caseId}` }, (payload: any) => {
+    const typingChannel = supabase.channel(`public:chat_typing:${numericCaseId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_typing', filter: `case_id=eq.${numericCaseId}` }, (payload: any) => {
         const d: any = payload.new ?? payload.old;
         if (!d) return;
         const ev = (payload && (payload.event || payload.type)) || 'INSERT';
@@ -105,9 +144,10 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
     };
   }, [caseId]);
 
+
   const uploadFileToStorage = async (file: File) => {
     const bucket = import.meta.env.VITE_CHAT_FILES_BUCKET || 'message-attachments';
-    const path = `${caseId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${file.name}`;
+  const path = `${numericCaseId}/${Date.now()}_${Math.random().toString(36).slice(2,8)}_${file.name}`;
     const { data, error } = await supabase.storage.from(bucket).upload(path, file, { upsert: false });
     if (error) throw error;
     const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
@@ -118,7 +158,7 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
     e.preventDefault();
     if (!inputText.trim() && attachmentsFiles.length === 0) return;
     try {
-      const payload: any = { case_id: caseId, user_id: userId, message: inputText || null };
+  const payload: any = { case_id: numericCaseId, user_id: userId, message: inputText || null };
       const { data: insertData, error: insertErr } = await (supabase.from as any)('chat_messages').insert(payload).select().single();
       if (insertErr) throw insertErr;
       const inserted: any = insertData;
@@ -138,7 +178,16 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
       setInputText('');
       setAttachmentsFiles([]);
       // append message locally (realtime will also add it)
-      setMessages(prev => [...prev, { id: String(messageId), case_id: caseId, user_id: userId, message: inputText, created_at: new Date().toISOString(), user_name: undefined, attachments: attached }]);
+  const newMsg = { id: String(messageId), case_id: (typeof numericCaseId === 'number' ? numericCaseId : Number(numericCaseId)), user_id: userId, message: inputText, created_at: new Date().toISOString(), user_name: undefined, attachments: attached };
+      setMessages(prev => [...prev, newMsg]);
+      if (userId) {
+        (async () => {
+          try {
+            const { data: prof } = await (supabase.from as any)('profiles').select('id, full_name, avatar_url').eq('id', userId).limit(1).single();
+            if (prof) setParticipants(prev => prev.find(p => p.id === prof.id) ? prev : [...prev, prof]);
+          } catch (e) { /* ignore */ }
+        })();
+      }
     } catch (err) {
       console.warn('send chat error', err);
       alert('Error enviando mensaje');
@@ -150,9 +199,9 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
   const sendTyping = useCallback(async () => {
     if (!userId) return;
     try {
-      await (supabase.from as any)('chat_typing').upsert({ case_id: caseId, user_id: userId, last_typing_at: new Date().toISOString() });
+      await (supabase.from as any)('chat_typing').upsert({ case_id: numericCaseId, user_id: userId, last_typing_at: new Date().toISOString() });
     } catch (err) { /* ignore */ }
-  }, [caseId, userId]);
+  }, [numericCaseId, userId]);
 
   return (
     <div className="flex flex-col h-full bg-white rounded-2xl ghost-border shadow-sm overflow-hidden">
@@ -182,7 +231,7 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
               const oldest = messages[0];
               const before = oldest?.created_at;
               const { data } = await (supabase.from as any)('chat_messages')
-                .select('id, case_id, user_id, message, created_at, profiles(id, full_name, avatar_url), message_attachments(id, file_name, file_url, file_type, size)')
+                .select('id, case_id, user_id, message, created_at, profiles:profiles(id, full_name, avatar_url), message_attachments:message_attachments(id, file_name, file_url, file_type, size)')
                 .eq('case_id', caseId)
                 .lt('created_at', before)
                 .order('created_at', { ascending: false })
@@ -191,6 +240,23 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
               const normalized = rows.map((d: any) => ({ id: String(d.id), case_id: d.case_id, user_id: d.user_id, message: d.message, created_at: d.created_at, user_name: d.profiles?.full_name ?? null, attachments: (d.message_attachments || []).map((a: any) => ({ id: a.id, file_name: a.file_name, file_url: a.file_url, file_type: a.file_type, size: a.size })) })).reverse();
               setMessages(prev => [...normalized, ...prev]);
               setHasMore(rows.length === pageSize);
+              // fetch profiles for newly loaded messages to populate user_name and participants
+              try {
+                const ids = Array.from(new Set(normalized.map(m => m.user_id).filter(Boolean)));
+                if (ids.length > 0) {
+                  const { data: profs } = await (supabase.from as any)('profiles').select('id, full_name, avatar_url').in('id', ids).limit(200);
+                  const profsArr = (profs || []) as any[];
+                  setParticipants(prev => {
+                    const map: Record<string, any> = {};
+                    prev.forEach(p => { map[p.id] = p; });
+                    profsArr.forEach(p => { map[p.id] = p; });
+                    return Object.values(map);
+                  });
+                  const byId: Record<string, any> = {};
+                  profsArr.forEach(p => { byId[p.id] = p; });
+                  setMessages(prev => prev.map(m => ({ ...m, user_name: (m.user_id && byId[m.user_id]) ? byId[m.user_id].full_name : m.user_name })));
+                }
+              } catch (err) { console.warn('load older participants fetch failed', err); }
             } catch (err) { console.warn('load older error', err); }
             setIsLoadingMore(false);
           })();

@@ -204,9 +204,16 @@ export function CaseDetail() {
           </div>
         </div>
 
-        {/* Right Column: Decision Panel */}
+        {/* Right Column: Chat above Decision Panel */}
         <aside className="lg:col-span-5 space-y-6">
-          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/10 overflow-hidden sticky top-24">
+          {/* Chat area moved above decision panel */}
+          <div>
+            <div className="bg-white rounded-2xl p-4 border border-outline-variant/10 shadow-sm sticky top-24">
+              <CaseChat caseId={caso.__raw?.id ?? caso.id} />
+            </div>
+          </div>
+
+          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/10 overflow-hidden">
             <div className="bg-primary text-on-primary p-6 flex justify-between items-center">
               <h3 className="text-xl font-serif font-black tracking-tight">Registro de Decisión</h3>
               <div className="text-[10px] font-label font-bold uppercase tracking-widest opacity-70">
@@ -321,12 +328,7 @@ export function CaseDetail() {
           )}
           </div>
 
-          {/* Chat area inserted below decision panel */}
-          <div>
-            <div className="bg-white rounded-2xl p-4 border border-outline-variant/10 shadow-sm">
-              <CaseChat caseId={caso.__raw?.id ?? caso.id} />
-            </div>
-          </div>
+          
 
           {/* Hint Card */}
           <div className="bg-tertiary/10 border-l-4 border-tertiary p-6 rounded-2xl flex gap-4 text-tertiary shadow-sm animate-pulse">

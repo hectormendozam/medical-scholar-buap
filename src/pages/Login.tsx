@@ -86,7 +86,7 @@ export function Login() {
                <School className="text-primary" size={32} />
             </div>
             <h3 className="font-serif text-3xl text-primary font-bold mb-2 tracking-tight">BUAP Medical Scholar</h3>
-            <p className="text-secondary font-label text-sm">Bienvenido al portal académico de posgrado</p>
+            <p className="text-secondary font-label text-sm">Bienvenido al portal académico de </p>
           </div>
 
           <form className="space-y-6" onSubmit={handleLogin}>

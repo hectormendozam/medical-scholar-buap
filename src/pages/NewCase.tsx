@@ -114,7 +114,67 @@ export default function NewCase() {
       expireAt = estimatedMinutes > 0 ? new Date(Date.now() + estimatedMinutes * 60000).toISOString() : null;
     }
 
-    let insertRes = await (supabase.from as any)('casos_clinicos').insert({
+    // helper to attempt insert and retry without unknown columns if the target table schema differs
+    const safeInsert = async (tableName: string, payload: any) => {
+      const payloadCopy = { ...payload };
+
+      // Quick fast-path: try inserting as-is first. If it succeeds, great.
+      try {
+        const res: any = await (supabase.from as any)(tableName).insert(payloadCopy).select();
+        return res;
+      } catch (err) {
+        // fallthrough to column-aware strategy
+        console.warn(`Initial insert into ${tableName} failed, attempting schema-aware insert`, err);
+      }
+
+      // Attempt to SELECT all provided keys; some DBs will error if unknown columns are requested.
+      const keys = Object.keys(payloadCopy || {});
+      if (keys.length === 0) {
+        // nothing to insert
+        return { error: new Error('Empty payload') } as any;
+      }
+
+      // Try selecting all keys at once. If that errors, we'll probe individually.
+      try {
+        const selectCols = keys.join(', ');
+        const { error } = await (supabase.from as any)(tableName).select(selectCols).limit(1);
+        if (!error) {
+          // All columns appear present — try insert again but wrap in try/catch to return proper error
+          try {
+            const res2: any = await (supabase.from as any)(tableName).insert(payloadCopy).select();
+            return res2;
+          } catch (err2) {
+            return { error: err2 } as any;
+          }
+        }
+      } catch (err) {
+        // proceed to per-column probing
+      }
+
+      // Per-column probe: check each key and drop those that cause errors when selected
+      const allowed: string[] = [];
+      for (const k of keys) {
+        try {
+          const { error } = await (supabase.from as any)(tableName).select(k).limit(1);
+          if (!error) allowed.push(k);
+        } catch (err) {
+          // column not present or inaccessible; skip
+        }
+      }
+
+      // Build payload only with allowed keys
+      const cleaned: any = {};
+      allowed.forEach(k => { cleaned[k] = payloadCopy[k]; });
+
+      try {
+        const res3: any = await (supabase.from as any)(tableName).insert(cleaned).select();
+        return res3;
+      } catch (err) {
+        return { error: err } as any;
+      }
+    };
+
+    let insertRes = await safeInsert('casos_clinicos', {
       titulo,
       categoria,
       nivel,
@@ -130,7 +190,7 @@ export default function NewCase() {
 
     if (insertRes.error) {
       // map to english table columns
-      insertRes = await (supabase.from as any)('clinical_cases').insert({
+      insertRes = await safeInsert('clinical_cases', {
         title: titulo,
         description: sintomas ?? null,
         initial_information: sintomas ?? null,
@@ -142,7 +202,7 @@ export default function NewCase() {
         estimated_minutes: estimatedMinutes,
         expire_at: expireAt,
         course_id: selectedCourse ?? null
-      } as any).select();
+      } as any);
     }
 
     const error = insertRes.error;

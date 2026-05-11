@@ -53,6 +53,7 @@ if [[ "$MODE" == "sql" ]]; then
   run_sql_file "db/alter_notifications_add_targets.sql"
   run_sql_file "db/notifications_distribute_course.sql"
   run_sql_file "db/2026_05_07_create_chat_attachments_and_invites.sql"
+  run_sql_file "db/2026_05_08_force_add_course_id.sql"
   run_sql_file "db/case_expiry_notify_pg_cron.sql"
   run_sql_file "db/seed_full_with_auth.sql"
   echo "Done. Review output above for any errors."
