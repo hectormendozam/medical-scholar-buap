@@ -18,6 +18,7 @@ import Profile from './pages/Profile';
 import MyGrades from './pages/MyGrades';
 import Notificaciones from './pages/Notificaciones';
 import Gestion from './pages/Gestion';
+import JoinCase from './pages/JoinCase';
 
 export default function App() {
   return (
@@ -54,6 +55,7 @@ export default function App() {
 
           {/* Perfil / Configuración */}
           <Route path="configuracion" element={<Profile />} />
+          <Route path="unirse" element={<JoinCase />} />
 
           {/* Catch-all redirect */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

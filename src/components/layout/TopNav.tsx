@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Search, Bell, UserCircle, X } from 'lucide-react';
+import { Search, Bell, UserCircle, X, LogOut, Edit, LogIn } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 
@@ -14,12 +14,14 @@ type NotificationRow = {
 };
 
 export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void }) {
-  const { isTeacher } = useAuth();
+  const { isTeacher, profile } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [loading, setLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const profileRef = useRef<HTMLDivElement | null>(null);
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
@@ -27,6 +29,7 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
     const onClick = (e: MouseEvent) => {
       if (!dropdownRef.current) return;
       if (!dropdownRef.current.contains(e.target as Node)) setOpen(false);
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) setProfileOpen(false);
     };
     document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
@@ -102,7 +105,7 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
         </nav>
       </div>
 
-      <div className="flex items-center gap-6">
+        <div className="flex items-center gap-6">
           <div className="relative group">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-outline" size={16} />
           <input 
@@ -119,6 +122,12 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
         </div>
         
         <div className="flex items-center gap-3 relative">
+          {!isTeacher && (
+            <button onClick={() => navigate('/unirse')} className="inline-flex items-center gap-2 px-3 py-2 bg-primary/10 text-primary rounded-full text-sm hover:bg-primary/20 transition-colors">
+              <LogIn size={16} />
+              <span>Unirse</span>
+            </button>
+          )}
           <div className="relative" ref={dropdownRef}>
             <button onClick={() => setOpen((o) => !o)} className="p-2 text-secondary hover:bg-surface-container-high rounded-full transition-all relative">
               <Bell size={20} />
@@ -157,9 +166,45 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
             )}
           </div>
 
-          <button onClick={() => navigate('/configuracion')} className="p-2 text-secondary hover:bg-surface-container-high rounded-full transition-all">
-            <UserCircle size={24} />
-          </button>
+          <div className="relative" ref={profileRef}>
+            <button onClick={() => setProfileOpen(p => !p)} className="flex items-center gap-2 p-2 text-secondary hover:bg-surface-container-high rounded-full transition-all">
+              {/* avatar */}
+              <div className="w-8 h-8 rounded-full overflow-hidden bg-surface-container-low flex items-center justify-center">
+                {profile?.avatar_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={profile.avatar_url} alt={profile?.full_name ?? 'U'} className="w-full h-full object-cover" />
+                ) : (
+                  <UserCircle size={20} />
+                )}
+              </div>
+            </button>
+
+            <div className={`absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-lg border border-outline-variant overflow-hidden z-50 transform transition-all duration-150 origin-top-right ${profileOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 -translate-y-1 pointer-events-none'}`}>
+              <div className="p-3 border-b border-surface-container-low flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full overflow-hidden bg-surface-container-low flex items-center justify-center">
+                  {profile?.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={profile.avatar_url} alt={profile?.full_name ?? 'U'} className="w-full h-full object-cover" />
+                  ) : (
+                    <UserCircle size={20} />
+                  )}
+                </div>
+                <div className="flex-1 text-sm">
+                  <div className="font-semibold">{profile?.full_name ?? profile?.email ?? 'Usuario'}</div>
+                  <div className="text-xs text-secondary truncate">{profile?.email ?? ''}</div>
+                </div>
+              </div>
+              <button onClick={() => { setProfileOpen(false); navigate('/configuracion'); }} className="w-full text-left p-3 hover:bg-surface-container-low flex items-center gap-3">
+                <Edit size={16} />
+                <span>Editar perfil</span>
+              </button>
+              <div className="border-t" />
+              <button onClick={async () => { try { await supabase.auth.signOut(); setProfileOpen(false); navigate('/login'); } catch (err) { console.warn('signout err', err); alert('Error cerrando sesión'); } }} className="w-full text-left p-3 hover:bg-surface-container-low flex items-center gap-3 text-rose-600">
+                <LogOut size={16} />
+                <span>Cerrar sesión</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </header>

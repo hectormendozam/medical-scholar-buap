@@ -1,344 +1,724 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  ArrowLeft, 
-  Star, 
-  FileText, 
-  SearchIcon, 
-  Download, 
-  Stethoscope, 
-  Activity, 
-  History, 
-  Send, 
-  Lightbulb,
-  FileBadge,
-  CheckCircle2,
-  FileCheck2
+import {
+  ArrowLeft, Stethoscope, Activity, History, Send, Lightbulb,
+  Clock, Tag, BookOpen, ClipboardList, Image as ImageIcon, FileText,
+  Copy, RefreshCw, Check, ChevronDown, ChevronUp, Users, Pencil, Star, Lock
 } from 'lucide-react';
-import { motion } from 'motion/react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { CaseChat } from '../components/CaseChat';
 import { useAuth } from '../context/AuthContext';
-import { CasoClinico } from '../types';
+import { CaseChat } from '../components/CaseChat';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: badge colour for estatus/status
+// ─────────────────────────────────────────────────────────────────────────────
+function StatusBadge({ status }: { status?: string }) {
+  const s = (status ?? '').toLowerCase();
+  const color =
+    s.includes('activo') || s.includes('publicado') ? 'bg-green-100 text-green-700' :
+    s.includes('proceso') ? 'bg-blue-100 text-blue-700' :
+    s.includes('pendiente') ? 'bg-yellow-100 text-yellow-700' :
+    'bg-stone-100 text-stone-500';
+  return (
+    <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest ${color}`}>
+      {status ?? 'Sin estado'}
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Invite-code panel (teacher-only)
+// ─────────────────────────────────────────────────────────────────────────────
+function InvitePanel({ caseId }: { caseId: any }) {
+  const [invites, setInvites] = useState<any[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [dbError, setDbError] = useState<string | null>(null);
+
+  const generateRandomCode = (len = 8) => {
+    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let out = '';
+    for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+    return out;
+  };
+
+  useEffect(() => {
+    if (!caseId) return;
+    (async () => {
+      try {
+        const { data, error } = await (supabase.from as any)('case_invites')
+          .select('id, code, used_by, used_at, created_at')
+          .eq('case_id', caseId)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        if (error) {
+          setDbError('La tabla case_invites no existe aún. Ejecuta la migración en Supabase (db/2026_05_11_create_case_invites.sql).');
+        } else {
+          setInvites((data as any[]) ?? []);
+          setDbError(null);
+        }
+      } catch (e: any) {
+        setDbError('Error al cargar códigos: ' + (e?.message ?? String(e)));
+      }
+    })();
+  }, [caseId]);
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    setDbError(null);
+    const code = generateRandomCode(8);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = (userData as any)?.user?.id ?? null;
+      const { data: inserted, error } = await (supabase.from as any)('case_invites')
+        .insert({ case_id: caseId, code, created_by: userId })
+        .select()
+        .maybeSingle();
+      if (error) {
+        // Insert failed — code was NOT saved in DB; show error so teacher knows
+        setDbError(`⚠️ El código "${code}" NO se guardó en la base de datos (${error.message ?? 'error desconocido'}). El alumno no podrá usarlo hasta que la tabla exista y tenga permisos de escritura.`);
+      } else if (inserted) {
+        setInvites((prev) => [inserted, ...prev]);
+        handleCopy(code);
+      }
+    } catch (e: any) {
+      setDbError(`⚠️ Error al guardar el código: ${e?.message ?? String(e)}`);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleCopy = (code: string) => {
+    try { navigator.clipboard.writeText(code); } catch { /* ignore */ }
+    setCopied(code);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-outline-variant/10 overflow-hidden">
+      <div className="bg-secondary/10 p-4 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-bold text-secondary uppercase tracking-widest">
+          <Users size={16} /> Códigos de Invitación
+        </div>
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          className="flex items-center gap-2 px-3 py-2 bg-primary text-white rounded-xl text-xs font-bold hover:brightness-110 transition-all disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={generating ? 'animate-spin' : ''} />
+          {generating ? 'Generando...' : 'Nuevo código'}
+        </button>
+      </div>
+
+      {dbError && (
+        <div className="mx-4 mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 leading-relaxed">
+          {dbError}
+        </div>
+      )}
+
+      <div className="divide-y divide-outline-variant/10 max-h-48 overflow-y-auto">
+        {invites.length === 0 && !dbError ? (
+          <p className="p-4 text-sm text-stone-400 text-center">No hay códigos generados aún. Genera uno para compartir con tus alumnos.</p>
+        ) : invites.map((inv) => (
+          <div key={inv.id} className="flex items-center justify-between px-4 py-3">
+            <div>
+              <span className="font-mono text-base tracking-widest font-bold">{inv.code}</span>
+              {inv.used_by && (
+                <span className="ml-3 text-[10px] font-bold bg-green-100 text-green-700 rounded-full px-2 py-0.5 uppercase">Usado</span>
+              )}
+            </div>
+            <button
+              onClick={() => handleCopy(inv.code)}
+              className="flex items-center gap-1 text-xs text-primary hover:underline"
+            >
+              {copied === inv.code ? <Check size={14} className="text-green-500" /> : <Copy size={14} />}
+              {copied === inv.code ? 'Copiado' : 'Copiar'}
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="p-3 bg-surface-container-low text-[10px] text-stone-400 text-center">
+        Los alumnos pueden usar estos códigos en la página <strong>/unirse</strong> para acceder al caso.
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main component
+// ─────────────────────────────────────────────────────────────────────────────
 export function CaseDetail() {
-  const { id } = useParams<{ id: string }>();
+  const { id } = useParams();
   const navigate = useNavigate();
-  const [caso, setCaso] = useState<CasoClinico | null>(null);
+  const { isTeacher } = useAuth();
+
+  const [caso, setCaso] = useState<any | null>(null);
+  const [caseFiles, setCaseFiles] = useState<any[]>([]);
+  const [creatorName, setCreatorName] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [publishingStatus, setPublishingStatus] = useState(false);
   const [diagnostico, setDiagnostico] = useState('');
   const [planTerapeutico, setPlanTerapeutico] = useState('');
   const [justificacion, setJustificacion] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const { isTeacher, loading } = useAuth();
+  const [canParticipate, setCanParticipate] = useState(false);
+  const [showAntecedentes, setShowAntecedentes] = useState(false);
+  // Submission state
+  const [existingResolution, setExistingResolution] = useState<any | null>(null);
+  const [existingGrade, setExistingGrade] = useState<any | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchCase() {
+    let mounted = true;
+    (async () => {
       if (!id) return;
-      let res: any = await supabase.from('casos_clinicos').select('*').eq('id', id).single();
-      if (!res.data || res.error) {
-        res = await supabase.from('clinical_cases').select('*').eq('id', id).single();
-      }
+      setLoading(true);
+      try {
+        // Try spanish table then english fallback
+        let fetchError: any = null;
+        let { data, error: err1 }: any = await (supabase.from as any)('casos_clinicos')
+          .select('*').eq('id', id).limit(1).maybeSingle();
+        if (!data) {
+          const r: any = await (supabase.from as any)('clinical_cases')
+            .select('*').eq('id', id).limit(1).maybeSingle();
+          data = r?.data ?? null;
+          if (!data) fetchError = err1 ?? r?.error ?? null;
+        }
+        if (!mounted) return;
+        // Log so the teacher can debug in console
+        if (!data) {
+          console.warn('[CaseDetail] Case not found. id=', id, 'error=', fetchError);
+          if (fetchError?.code === 'PGRST301' || String(fetchError?.message ?? '').includes('policy')) {
+            console.warn('[CaseDetail] RLS is blocking read. Run db/2026_05_11_rls_cases_read.sql in Supabase.');
+          }
+        }
+        setCaso(data ?? null);
 
-      if (res && res.data) {
-        const r: any = res.data;
-        const normalized = {
-          id: r.id != null ? String(r.id) : '',
-          titulo: r.titulo ?? r.title ?? '',
-          descripcion_inicial: r.descripcion_inicial ?? r.description ?? r.initial_information ?? null,
-          antecedentes: r.antecedentes ?? r.clinical_history ?? null,
-          sintomas: r.sintomas ?? r.symptoms ?? null,
-          nombre_paciente: r.nombre_paciente ?? null,
-          nivel: r.nivel ?? r.level ?? null,
-          tiempo_estimado: r.tiempo_estimado ?? r.time ?? null,
-          categoria: r.categoria ?? r.category ?? null,
-          estatus: r.estatus ?? r.status ?? 'borrador',
-          consejo_mentor: r.consejo_mentor ?? null,
-          created_at: r.created_at ?? r.published_at ?? null,
-          __raw: r,
-        } as unknown as CasoClinico;
-        setCaso(normalized);
+        // fetch creator name
+        if (data) {
+          const creatorId = data.instructor_id ?? data.created_by ?? null;
+          if (creatorId) {
+            try {
+              const { data: prof } = await (supabase.from as any)('profiles').select('full_name, email').eq('id', creatorId).limit(1).maybeSingle();
+              if (prof) setCreatorName(prof.full_name ?? prof.email ?? null);
+            } catch { /* ignore */ }
+          }
+        }
+
+        // fetch case files
+        if (data?.id) {
+          try {
+            const { data: files } = await (supabase.from as any)('case_files')
+              .select('*').eq('case_id', data.id).limit(20);
+            setCaseFiles((files as any[]) ?? []);
+          } catch { /* ignore */ }
+        }
+
+        // compute canParticipate
+        const { data: userData } = await supabase.auth.getUser();
+        const userId = (userData as any)?.user?.id ?? null;
+        if (mounted) setUserId(userId);
+
+        if (isTeacher) {
+          setCanParticipate(true);
+        } else if (userId && data) {
+          const creatorId = data.instructor_id ?? data.created_by ?? data.user_id ?? null;
+          if (creatorId === userId) {
+            setCanParticipate(true);
+          } else {
+            try {
+              const { data: assignment } = await (supabase.from as any)('case_assignments')
+                .select('id').eq('case_id', data.id).eq('user_id', userId).limit(1).maybeSingle();
+              if (assignment) {
+                setCanParticipate(true);
+              } else {
+                const { data: invite } = await (supabase.from as any)('case_invites')
+                  .select('id').eq('case_id', data.id).eq('used_by', userId).limit(1).maybeSingle();
+                if (invite) setCanParticipate(true);
+              }
+            } catch { /* ignore */ }
+          }
+        }
+
+        // Check for existing submission (separated queries to avoid join errors)
+        if (userId && data?.id && !isTeacher) {
+          let existing: any = null;
+          let evalRow: any = null;
+
+          // 1. Try case_resolutions (no join)
+          try {
+            const { data: cr, error: crErr } = await (supabase.from as any)('case_resolutions')
+              .select('*')
+              .eq('case_id', data.id).eq('resolved_by', userId).limit(1).maybeSingle();
+            if (!crErr && cr) {
+              existing = { ...cr, _table: 'case_resolutions' };
+              // Try to fetch evaluation separately
+              try {
+                const { data: ev } = await (supabase.from as any)('evaluations')
+                  .select('id, total_score, feedback')
+                  .eq('case_resolution_id', cr.id).limit(1).maybeSingle();
+                if (ev) evalRow = ev;
+              } catch { /* evaluations table may not exist */ }
+            }
+          } catch { /* ignore */ }
+
+          // 2. Try resoluciones if nothing found yet
+          if (!existing) {
+            try {
+              const { data: res, error: resErr } = await (supabase.from as any)('resoluciones')
+                .select('*')
+                .eq('caso_id', data.id).eq('estudiante_id', userId).limit(1).maybeSingle();
+              if (!resErr && res) {
+                existing = { ...res, _table: 'resoluciones' };
+                // Try to fetch evaluacion separately
+                try {
+                  const { data: ev } = await (supabase.from as any)('evaluaciones')
+                    .select('id, calificacion, retroalimentacion')
+                    .eq('resolucion_id', res.id).limit(1).maybeSingle();
+                  if (ev) evalRow = ev;
+                } catch { /* evaluaciones table may not exist */ }
+              }
+            } catch { /* ignore */ }
+          }
+
+          if (mounted) {
+            setExistingResolution(existing);
+            setExistingGrade(evalRow);
+            if (existing) {
+              setDiagnostico(existing.diagnostico ?? existing.resolution ?? '');
+              setPlanTerapeutico(existing.plan_terapeutico ?? '');
+              setJustificacion(existing.justificacion ?? existing.conclusion ?? '');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('fetch case error', err);
+      } finally {
+        if (mounted) setLoading(false);
       }
+    })();
+    return () => { mounted = false; };
+  }, [id, isTeacher]);
+
+  const changeStatus = async (newStatus: string) => {
+    if (!caso) return;
+    setPublishingStatus(true);
+    try {
+      const table = caso.titulo !== undefined ? 'casos_clinicos' : 'clinical_cases';
+      const statusField = table === 'casos_clinicos' ? 'estatus' : 'status';
+      const extraFields = table === 'clinical_cases' && newStatus === 'publicado'
+        ? { published_at: new Date().toISOString() } : {};
+      const { error } = await (supabase.from as any)(table)
+        .update({ [statusField]: newStatus, ...extraFields })
+        .eq('id', caso.id);
+      if (error) throw error;
+      setCaso((prev: any) => ({ ...prev, estatus: newStatus, status: newStatus }));
+    } catch (err: any) {
+      alert('Error cambiando estatus: ' + (err?.message ?? String(err)));
+    } finally {
+      setPublishingStatus(false);
     }
-    fetchCase();
-  }, [id]);
+  };
 
-  if (!caso) return <div className="flex justify-center p-20">Cargando caso...</div>;
+  const submitResolution = async () => {    if (!caso) return;
+    setIsSubmitting(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const uid = (userData as any)?.user?.id ?? userId ?? null;
+
+      // If editing, delete the existing resolution first
+      if (isEditing && existingResolution) {
+        if (existingResolution._table === 'case_resolutions') {
+          await (supabase.from as any)('case_resolutions').delete().eq('id', existingResolution.id);
+        } else {
+          await (supabase.from as any)('resoluciones').delete().eq('id', existingResolution.id);
+        }
+        setExistingResolution(null);
+        setExistingGrade(null);
+        setIsEditing(false);
+      }
+
+      let res: any = await (supabase.from as any)('resoluciones').insert({
+        estudiante_id: uid,
+        caso_id: caso.id,
+        diagnostico,
+        plan_terapeutico: planTerapeutico,
+        justificacion,
+        estatus: 'En Revisión'
+      }).select();
+
+      if (res.error) {
+        console.warn('[submitResolution] resoluciones failed:', res.error.message, '— trying case_resolutions...');
+        res = await (supabase.from as any)('case_resolutions').insert({
+          case_id: caso.id,
+          resolved_by: uid,
+          resolution: diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : ''),
+          conclusion: justificacion,
+          status: 'En Revisión'
+        }).select();
+        console.log('[submitResolution] case_resolutions result:', res.data, res.error);
+      } else {
+        console.log('[submitResolution] resoluciones OK:', res.data);
+      }
+
+      if (res.error) {
+        alert('Error al enviar: ' + (res.error.message ?? String(res.error)));
+      } else {
+        const inserted = Array.isArray(res.data) ? res.data[0] : res.data;
+        const table = inserted?.caso_id !== undefined ? 'resoluciones' : 'case_resolutions';
+        setExistingResolution(inserted ? { ...inserted, _table: table } : null);
+        alert('¡Resolución enviada correctamente!');
+      }
+    } catch (err: any) {
+      alert('Error al enviar: ' + (err.message ?? String(err)));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // ── derived display values ──────────────────────────────────────────────────
+  const titulo = caso?.titulo ?? caso?.title ?? 'Caso clínico';
+  const categoria = caso?.categoria ?? caso?.category ?? '';
+  const nivel = caso?.nivel ?? caso?.level ?? '';
+  const estatus = caso?.estatus ?? caso?.status ?? '';
+  const tiempoEstimado = caso?.tiempo_estimado ?? (caso?.estimated_minutes ? `${caso.estimated_minutes} min` : null);
+  const expireAt = caso?.expire_at ?? null;
+  const sintomas = caso?.sintomas ?? caso?.symptoms ?? caso?.description ?? caso?.initial_information ?? '';
+  const antecedentes = caso?.antecedentes ?? caso?.clinical_history ?? '';
+  const consejoMentor = caso?.consejo_mentor ?? '';
+  const etiquetas: string[] = Array.isArray(caso?.etiquetas) ? caso.etiquetas
+    : Array.isArray(caso?.tags) ? caso.tags
+    : typeof caso?.etiquetas === 'string' ? caso.etiquetas.split(',').map((t: string) => t.trim()).filter(Boolean)
+    : typeof caso?.tags === 'string' ? caso.tags.split(',').map((t: string) => t.trim()).filter(Boolean)
+    : [];
+  const rawCaseId = caso?.id ?? id;
+
+  const imageFiles = caseFiles.filter(f => f.mime?.startsWith('image/') || /\.(jpe?g|png|gif|webp|svg)$/i.test(f.file_name ?? ''));
+  const pdfFiles = caseFiles.filter(f => f.mime === 'application/pdf' || /\.pdf$/i.test(f.file_name ?? ''));
+
+  if (loading) {
+    return (
+      <div className="max-w-6xl mx-auto py-16 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      </div>
+    );
+  }
+
+  if (!caso) {
+    return (
+      <div className="max-w-6xl mx-auto py-16 text-center space-y-3">
+        <p className="text-lg font-bold text-on-surface">Caso no encontrado</p>
+        <p className="text-sm text-secondary max-w-md mx-auto">
+          El caso no existe o tu cuenta no tiene permisos para verlo todavía.
+          Si acabas de unirte con un código, intenta recargar la página.
+        </p>
+        <div className="flex justify-center gap-3 pt-2">
+          <button onClick={() => window.location.reload()} className="px-4 py-2 bg-primary text-white rounded-xl text-sm font-bold">Recargar</button>
+          <button onClick={() => navigate('/casos')} className="px-4 py-2 border rounded-xl text-sm">Ver casos</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-[1400px] mx-auto pb-20">
-      {/* Header Area */}
-      <header className="mb-10">
-        <button 
-          onClick={() => navigate('/dashboard')}
-          className="flex items-center gap-2 text-sm font-label text-secondary hover:text-primary transition-colors mb-4 group"
-        >
-          <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" />
-          <span>Volver a Casos</span>
-          <span className="mx-1 text-outline">/</span>
-          <span className="text-primary font-bold">Caso #{caso.id.substring(0,4)} - {caso.categoria || 'Sin categoría'}</span>
+    <div className="max-w-6xl mx-auto py-8 space-y-6">
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div className="flex items-start gap-4">
+        <button onClick={() => navigate(-1)} className="mt-1 p-2 rounded-xl bg-surface-container hover:bg-surface-container-high transition-colors">
+          <ArrowLeft size={18} />
         </button>
-        
-        <h1 className="text-5xl font-serif font-black text-on-background tracking-tight leading-tight">
-          {caso.titulo}
-        </h1>
-        
-        <div className="flex items-center gap-4 mt-4">
-          <div className="flex items-center gap-2 bg-tertiary/10 text-tertiary px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider">
-            <Star size={14} fill="currentColor" />
-            Nivel: {caso.nivel || 'Básico'}
-          </div>
-          <div className="text-secondary text-sm font-medium flex items-center gap-2">
-            <Activity size={16} className="text-outline" />
-            Tiempo Estimado: {caso.tiempo_estimado || 'No especificado'}
-          </div>
-        </div>
-      </header>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
-        {/* Left Column: Clinical Info */}
-        <div className="lg:col-span-7 space-y-10">
-          {/* Main Case Card */}
-          <div className="bg-white rounded-2xl p-10 shadow-sm border border-outline-variant/10">
-            <div className="flex items-center gap-4 border-b border-surface-container pb-6 mb-8">
-              <div className="p-3 bg-primary/10 rounded-xl">
-                <FileText className="text-primary" size={24} />
-              </div>
-              <h2 className="text-2xl font-serif font-bold text-on-background">Resumen Clínico</h2>
-            </div>
-
-            <div className="grid grid-cols-2 gap-10 mb-10">
-              <div>
-                <label className="text-[10px] font-label font-black text-outline uppercase tracking-[0.2em] mb-2 block">Paciente</label>
-                <p className="text-xl font-serif font-bold text-on-background">{caso.nombre_paciente || 'No especificado'}</p>
-              </div>
-              <div>
-                <label className="text-[10px] font-label font-black text-outline uppercase tracking-[0.2em] mb-2 block">Motivo de consulta</label>
-                <p className="text-xl font-serif font-bold text-on-background">{caso.descripcion_inicial || 'No especificado'}</p>
-              </div>
-            </div>
-
-            <div className="space-y-6 text-on-background/80 leading-relaxed">
-              <div className="bg-surface-container-low p-6 rounded-2xl">
-                <h3 className="flex items-center gap-2 text-primary text-xs font-black uppercase tracking-widest mb-4">
-                   <Activity size={14} /> Sintomatología
-                </h3>
-                <p>
-                  {caso.sintomas || 'No hay síntomas registrados.'}
-                </p>
-              </div>
-
-              <div className="bg-surface-container-low p-6 rounded-2xl">
-                <h3 className="flex items-center gap-2 text-primary text-xs font-black uppercase tracking-widest mb-4">
-                  <History size={14} /> Antecedentes
-                </h3>
-                <ul className="space-y-3 list-none">
-                  {(caso.antecedentes || 'Sin antecedentes').split('\n').filter(item => item.trim() !== '').map((item, i) => (
-                    <li key={i} className="flex gap-3 text-sm">
-                      <div className="w-1.5 h-1.5 rounded-full bg-primary/40 mt-1.5" />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          {/* Evidence Grid */}
-          <div className="grid grid-cols-2 gap-6">
-            {/* Image Evidence */}
-            <div className="group bg-white rounded-2xl p-4 shadow-sm border border-outline-variant/10 hover:shadow-xl transition-all cursor-zoom-in">
-              <div className="aspect-[4/3] rounded-xl overflow-hidden mb-4 relative">
-                <img 
-                  src="https://images.unsplash.com/photo-1579684385127-1ef15d508118?auto=format&fit=crop&q=80&w=1000" 
-                  alt="X-ray"
-                  className="w-full h-full object-cover grayscale transition-transform duration-500 group-hover:scale-105"
-                />
-                <div className="absolute inset-0 bg-black/5" />
-                <div className="absolute bottom-3 right-3 bg-black/60 backdrop-blur-md text-white text-[9px] font-bold px-3 py-1 rounded-full uppercase tracking-widest">
-                  RX Tórax - PA
-                </div>
-              </div>
-              <div className="flex justify-between items-center px-2">
-                <span className="text-sm font-bold font-serif">Radiografía de Tórax</span>
-                <SearchIcon size={16} className="text-outline" />
-              </div>
-            </div>
-
-            {/* Document Evidence */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-outline-variant/10 flex flex-col justify-between hover:bg-surface-container-low transition-colors group cursor-pointer">
-              <div className="flex justify-between items-start">
-                <div className="p-3 bg-red-50 text-red-600 rounded-xl group-hover:bg-red-600 group-hover:text-white transition-colors">
-                  <FileBadge size={28} />
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                   <div className="bg-green-50 text-green-600 px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider flex items-center gap-1">
-                      <CheckCircle2 size={10} /> Cargado
-                   </div>
-                </div>
-              </div>
-              <div>
-                <h4 className="text-sm font-bold font-serif mb-1 group-hover:text-primary transition-colors">Laboratorios_Completos.pdf</h4>
-                <p className="text-[10px] text-secondary font-label font-bold uppercase tracking-wider">Biometría, Química, NT-proBNP</p>
-              </div>
-            </div>
-
-            {/* EKG Section */}
-            <div className="col-span-2 bg-white rounded-2xl p-8 shadow-sm border-l-4 border-primary border-t border-r border-b border-outline-variant/10 flex items-center gap-8">
-              <div className="w-40 h-20 bg-surface-container rounded-xl overflow-hidden hidden sm:block">
-                <img 
-                  src="https://images.unsplash.com/photo-1530026405186-ed1f139313f8?auto=format&fit=crop&q=80&w=600" 
-                  alt="EKG"
-                  className="w-full h-full object-cover opacity-30 grayscale"
-                />
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2 text-primary text-xs font-black uppercase tracking-widest mb-2">
-                  <Stethoscope size={16} /> Interpretación EKG
-                </div>
-                <p className="text-sm font-serif italic text-on-background/80">"Ritmo sinusal, 88 lpm, Criterios de Sokolow-Lyon positivos para HVI."</p>
-              </div>
-              <button className="p-3 bg-surface-container-high rounded-full text-secondary hover:bg-primary hover:text-white transition-all">
-                <Download size={20} />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Chat above Decision Panel */}
-        <aside className="lg:col-span-5 space-y-6">
-          {/* Chat area moved above decision panel */}
-          <div>
-            <div className="bg-white rounded-2xl p-4 border border-outline-variant/10 shadow-sm sticky top-24">
-              <CaseChat caseId={caso.__raw?.id ?? caso.id} />
-            </div>
-          </div>
-
-          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/10 overflow-hidden">
-            <div className="bg-primary text-on-primary p-6 flex justify-between items-center">
-              <h3 className="text-xl font-serif font-black tracking-tight">Registro de Decisión</h3>
-              <div className="text-[10px] font-label font-bold uppercase tracking-widest opacity-70">
-                Puntuación Máx: 100
-              </div>
-            </div>
-
-            {loading ? (
-              <div className="p-8">Cargando perfil...</div>
-            ) : isTeacher ? (
-              <form className="p-8 space-y-8" onSubmit={async (e) => {
-              e.preventDefault();
-              if (!caso) return;
-              setIsSubmitting(true);
-              const { data: userData } = await supabase.auth.getUser();
-              const userId = userData?.user?.id ?? null;
-
-              // Try Spanish table first, otherwise fallback to English-named table
-              let insertRes: any = await supabase.from('resoluciones').insert({
-                estudiante_id: userId,
-                caso_id: caso.id,
-                diagnostico,
-                plan_terapeutico: planTerapeutico,
-                justificacion,
-                estatus: 'En Revisión'
-              } as any);
-
-              if (insertRes.error) {
-                insertRes = await supabase.from('case_resolutions').insert({
-                  case_id: caso.__raw?.id ?? caso.id,
-                  resolved_by: userId,
-                  resolution: diagnostico + '\n\nPlan:\n' + planTerapeutico,
-                  conclusion: justificacion
-                } as any);
-              }
-
-              const error = insertRes.error;
-              
-              setIsSubmitting(false);
-              if (!error) {
-                alert('¡Resolución enviada correctamente!');
-                navigate('/dashboard');
-              } else {
-                alert('Error al enviar: ' + error.message);
-              }
-            }}>
-              {/* Diagnóstico */}
-              <div className="space-y-3">
-                <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 ml-1">
-                  <Stethoscope size={14} className="text-primary" /> Diagnóstico Diferencial
-                </label>
-                <textarea 
-                  value={diagnostico}
-                  onChange={(e) => setDiagnostico(e.target.value)}
-                  required
-                  className="w-full h-32 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary focus:bg-white transition-all outline-none resize-none font-serif"
-                  placeholder="Liste al menos 3 diagnósticos probables..."
-                />
-              </div>
-
-              {/* Plan Terapéutico */}
-              <div className="space-y-4">
-                <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 ml-1">
-                  <Activity size={14} className="text-primary" /> Plan Terapéutico
-                </label>
-                <textarea 
-                  value={planTerapeutico}
-                  onChange={(e) => setPlanTerapeutico(e.target.value)}
-                  required
-                  className="w-full h-32 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary focus:bg-white transition-all outline-none resize-none font-serif"
-                  placeholder="Describa el plan terapéutico a seguir..."
-                />
-              </div>
-
-              {/* Justificación */}
-              <div className="space-y-3">
-                <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 ml-1">
-                  <History size={14} className="text-primary" /> Justificación Clínica
-                </label>
-                <textarea 
-                  value={justificacion}
-                  onChange={(e) => setJustificacion(e.target.value)}
-                  required
-                  className="w-full h-40 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary focus:bg-white transition-all outline-none resize-none"
-                  placeholder="Fundamente su decisión basándose en las guías de práctica clínica..."
-                />
-                <p className="text-[10px] text-outline italic text-right px-2 font-medium">Mínimo 200 caracteres para análisis profundo</p>
-              </div>
-
-              {/* CTA */}
-              <button 
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-black rounded-2xl shadow-xl shadow-primary/30 hover:shadow-primary/50 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed"
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-3 mb-1">
+            <h1 className="text-2xl font-headline font-bold text-on-surface truncate">{titulo}</h1>
+            <StatusBadge status={estatus} />
+            {isTeacher && (estatus.toLowerCase().includes('borrador') || estatus.toLowerCase().includes('pendiente')) && (
+              <button
+                onClick={() => changeStatus(caso?.titulo !== undefined ? 'Publicado' : 'publicado')}
+                disabled={publishingStatus}
+                className="flex items-center gap-1.5 px-3 py-1 bg-green-600 text-white text-[11px] font-bold rounded-full hover:bg-green-700 transition-colors disabled:opacity-50"
               >
-                <span>{isSubmitting ? 'Enviando...' : 'Enviar Solución'}</span>
-                <Send size={20} />
+                {publishingStatus ? 'Publicando...' : '▶ Publicar caso'}
               </button>
-              
-              <p className="text-center text-[10px] font-label font-bold text-outline uppercase tracking-wider">
-                Al enviar, su respuesta será evaluada por el cuerpo docente.
-              </p>
-            </form>
-          ) : (
-            <div className="p-8">
-              <h3 className="text-lg font-bold mb-2">Participación restringida</h3>
-              <p className="text-sm text-secondary mb-4">Como estudiante puedes ver el caso y enviar propuestas de resolución a través del flujo de actividades, pero no tienes permisos para publicar o calificar resoluciones directamente en esta pantalla.</p>
-              <div className="flex gap-3">
-                <button onClick={() => navigate('/casos')} className="px-4 py-2 rounded-xl bg-primary text-white">Volver a Casos</button>
+            )}
+            {isTeacher && (estatus.toLowerCase().includes('publicado') || estatus.toLowerCase().includes('activo')) && (
+              <button
+                onClick={() => changeStatus(caso?.titulo !== undefined ? 'Borrador' : 'borrador')}
+                disabled={publishingStatus}
+                className="flex items-center gap-1.5 px-3 py-1 bg-stone-400 text-white text-[11px] font-bold rounded-full hover:bg-stone-500 transition-colors disabled:opacity-50"
+              >
+                {publishingStatus ? '...' : '⏸ Despublicar'}
+              </button>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-sm text-secondary">
+            {categoria && (
+              <span className="flex items-center gap-1.5 font-medium">
+                <BookOpen size={13} /> {categoria}
+              </span>
+            )}
+            {nivel && (
+              <span className="flex items-center gap-1.5">
+                <ClipboardList size={13} /> {nivel}
+              </span>
+            )}
+            {tiempoEstimado && (
+              <span className="flex items-center gap-1.5">
+                <Clock size={13} /> {tiempoEstimado}
+              </span>
+            )}
+            {expireAt && (
+              <span className="flex items-center gap-1.5 text-orange-500">
+                <Clock size={13} /> Vence: {new Date(expireAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+            {creatorName && (
+              <span className="flex items-center gap-1.5 text-stone-400">
+                <Users size={13} /> Por: {creatorName}
+              </span>
+            )}
+          </div>
+          {etiquetas.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {etiquetas.map((tag) => (
+                <span key={tag} className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-primary/10 text-primary rounded-full uppercase tracking-widest">
+                  <Tag size={9} /> {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Body grid ───────────────────────────────────────────────────────── */}
+      <div className="grid lg:grid-cols-12 gap-6">
+        {/* Left column */}
+        <div className="lg:col-span-7 space-y-5">
+          {/* Resumen clínico */}
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-outline-variant/10">
+            <h2 className="flex items-center gap-2 text-base font-bold mb-3">
+              <Stethoscope size={16} className="text-primary" /> Resumen del Cuadro Clínico
+            </h2>
+            {sintomas ? (
+              <p className="text-sm text-on-surface/80 leading-relaxed whitespace-pre-wrap">{sintomas}</p>
+            ) : (
+              <p className="text-sm text-secondary italic">Sin resumen disponible.</p>
+            )}
+          </div>
+
+          {/* Antecedentes (collapsible) */}
+          {antecedentes ? (
+            <div className="bg-white rounded-2xl shadow-sm border border-outline-variant/10 overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between px-6 py-4 text-sm font-bold hover:bg-surface-container/50 transition-colors"
+                onClick={() => setShowAntecedentes((v) => !v)}
+              >
+                <span className="flex items-center gap-2">
+                  <ClipboardList size={15} className="text-primary" /> Antecedentes de Importancia
+                </span>
+                {showAntecedentes ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </button>
+              {showAntecedentes && (
+                <div className="px-6 pb-5">
+                  <p className="text-sm text-on-surface/80 leading-relaxed whitespace-pre-wrap">{antecedentes}</p>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* Imágenes diagnósticas */}
+          {imageFiles.length > 0 && (
+            <div className="bg-white rounded-2xl p-5 shadow-sm border border-outline-variant/10">
+              <h3 className="flex items-center gap-2 text-sm font-bold mb-3">
+                <ImageIcon size={15} className="text-primary" /> Imágenes Diagnósticas
+              </h3>
+              <div className="flex flex-wrap gap-3">
+                {imageFiles.map((f) => (
+                  <a key={f.id} href={f.file_url} target="_blank" rel="noreferrer"
+                    className="w-24 h-24 rounded-xl overflow-hidden border border-outline-variant/20 hover:ring-2 hover:ring-primary transition-all">
+                    <img src={f.file_url} alt={f.file_name} className="w-full h-full object-cover" />
+                  </a>
+                ))}
               </div>
             </div>
           )}
+
+          {/* Laboratorios / PDFs */}
+          {pdfFiles.length > 0 && (
+            <div className="bg-white rounded-2xl p-5 shadow-sm border border-outline-variant/10">
+              <h3 className="flex items-center gap-2 text-sm font-bold mb-3">
+                <FileText size={15} className="text-primary" /> Laboratorios y Documentos
+              </h3>
+              <div className="space-y-2">
+                {pdfFiles.map((f) => (
+                  <a key={f.id} href={f.file_url} target="_blank" rel="noreferrer"
+                    className="flex items-center justify-between px-4 py-3 bg-surface-container-low rounded-xl hover:bg-surface-container transition-colors text-sm">
+                    <span className="flex items-center gap-2 truncate"><FileText size={14} className="text-secondary shrink-0" />{f.file_name}</span>
+                    <span className="text-primary font-bold text-xs ml-3 shrink-0">Abrir →</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Mentor hint */}
+          {(consejoMentor || true) && (
+            <div className="bg-tertiary/10 border-l-4 border-tertiary p-5 rounded-2xl flex gap-4 text-tertiary shadow-sm">
+              <Lightbulb size={22} className="shrink-0 mt-0.5" />
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest block mb-1">Sugerencia del Mentor</span>
+                <p className="text-xs leading-relaxed font-medium">
+                  {consejoMentor || 'Analiza cuidadosamente los datos clínicos antes de emitir tu diagnóstico diferencial.'}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right column */}
+        <aside className="lg:col-span-5 space-y-5">
+          {/* Chat */}
+          <div className="bg-white rounded-2xl p-4 border border-outline-variant/10 shadow-sm">
+            <CaseChat caseId={String(rawCaseId)} />
           </div>
 
-          
+          {/* Invite codes — teachers only */}
+          {isTeacher && <InvitePanel caseId={rawCaseId} />}
 
-          {/* Hint Card */}
-          <div className="bg-tertiary/10 border-l-4 border-tertiary p-6 rounded-2xl flex gap-4 text-tertiary shadow-sm animate-pulse">
-            <Lightbulb className="flex-shrink-0" size={24} />
-            <div className="space-y-1">
-              <span className="text-[10px] font-black uppercase tracking-widest">Sugerencia del Mentor</span>
-              <p className="text-xs leading-relaxed font-medium">
-                {caso.consejo_mentor || 'Analiza cuidadosamente los datos clínicos para formular tu decisión.'}
-              </p>
+          {/* Decision panel */}
+          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/10 overflow-hidden">
+            <div className="bg-primary text-on-primary p-5 flex justify-between items-center">
+              <h3 className="text-lg font-serif font-black tracking-tight">Registro de Decisión</h3>
+              <span className="text-[10px] font-bold uppercase tracking-widest opacity-70">Máx: 100 pts</span>
             </div>
+
+            {/* ── Grade badge if already graded ───────────────────────────── */}
+            {existingGrade && (
+              <div className="flex items-center gap-4 px-6 py-4 bg-green-50 border-b border-green-100">
+                <Star size={18} className="text-amber-500 fill-amber-400 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-xs font-black text-green-700 uppercase tracking-widest">Calificación recibida</p>
+                  <p className="text-2xl font-serif font-black text-green-700">
+                    {existingGrade.total_score ?? existingGrade.calificacion ?? '—'}
+                    <span className="text-sm font-normal text-green-400">/100</span>
+                  </p>
+                  {(existingGrade.feedback ?? existingGrade.retroalimentacion) && (
+                    <p className="text-xs text-green-700 mt-1 italic">"{existingGrade.feedback ?? existingGrade.retroalimentacion}"</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {isTeacher || canParticipate ? (
+              <>
+                {/* ── Already submitted + not editing ──────────────────────── */}
+                {existingResolution && !isEditing ? (
+                  <div className="p-6 space-y-5">
+                    <div className="flex items-center gap-2 text-amber-600 text-sm font-bold">
+                      <Lock size={14} /> Decisión enviada — solo lectura
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><Stethoscope size={10} /> Diagnóstico</p>
+                        <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{existingResolution.diagnostico ?? existingResolution.resolution ?? '—'}</p>
+                      </div>
+                      {(existingResolution.plan_terapeutico) && (
+                        <div>
+                          <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><Activity size={10} /> Plan Terapéutico</p>
+                          <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{existingResolution.plan_terapeutico}</p>
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><History size={10} /> Justificación</p>
+                        <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{existingResolution.justificacion ?? existingResolution.conclusion ?? '—'}</p>
+                      </div>
+                    </div>
+                    {!existingGrade && (
+                      <button
+                        onClick={() => setIsEditing(true)}
+                        className="w-full py-3 border-2 border-primary text-primary font-black rounded-2xl hover:bg-primary/5 transition-all flex items-center justify-center gap-2 text-sm"
+                      >
+                        <Pencil size={15} /> Editar decisión
+                      </button>
+                    )}
+                    {existingGrade && (
+                      <p className="text-center text-[10px] text-outline uppercase tracking-wider">Ya fue calificada, no se puede editar.</p>
+                    )}
+                  </div>
+                ) : (
+                  /* ── Form (new submission or editing) ───────────────────── */
+                  <form className="p-6 space-y-5" onSubmit={(e) => { e.preventDefault(); submitResolution(); }}>
+                    {isEditing && (
+                      <div className="flex items-center justify-between text-sm text-amber-600 font-bold bg-amber-50 px-4 py-2 rounded-xl">
+                        <span className="flex items-center gap-1"><Pencil size={13} /> Editando tu decisión anterior</span>
+                        <button type="button" onClick={() => setIsEditing(false)} className="text-xs underline">Cancelar</button>
+                      </div>
+                    )}
+                    <div>
+                      <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 mb-2">
+                        <Stethoscope size={13} className="text-primary" /> Diagnóstico Diferencial
+                      </label>
+                      <textarea
+                        value={diagnostico}
+                        onChange={(e) => setDiagnostico(e.target.value)}
+                        required
+                        className="w-full h-28 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary transition-all outline-none resize-none font-serif"
+                        placeholder="Liste al menos 3 diagnósticos probables..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 mb-2">
+                        <Activity size={13} className="text-primary" /> Plan Terapéutico
+                      </label>
+                      <textarea
+                        value={planTerapeutico}
+                        onChange={(e) => setPlanTerapeutico(e.target.value)}
+                        required
+                        className="w-full h-28 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary transition-all outline-none resize-none font-serif"
+                        placeholder="Describa el plan terapéutico a seguir..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-black text-secondary uppercase tracking-[0.2em] flex items-center gap-2 mb-2">
+                        <History size={13} className="text-primary" /> Justificación Clínica
+                      </label>
+                      <textarea
+                        value={justificacion}
+                        onChange={(e) => setJustificacion(e.target.value)}
+                        required
+                        className="w-full h-32 bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary transition-all outline-none resize-none"
+                        placeholder="Fundamente su decisión basándose en las guías de práctica clínica..."
+                      />
+                      <p className="text-[10px] text-outline italic text-right mt-1 px-1">Mínimo 200 caracteres</p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="w-full py-4 bg-gradient-to-r from-primary to-primary-container text-on-primary font-black rounded-2xl shadow-lg shadow-primary/25 hover:shadow-primary/40 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-3 uppercase tracking-widest disabled:opacity-50"
+                    >
+                      <span>{isSubmitting ? 'Enviando...' : isEditing ? 'Guardar cambios' : 'Enviar Solución'}</span>
+                      <Send size={18} />
+                    </button>
+                    <p className="text-center text-[10px] text-outline uppercase tracking-wider">
+                      Tu respuesta será evaluada por el cuerpo docente.
+                    </p>
+                  </form>
+                )}
+              </>
+            ) : (
+              <div className="p-8 text-center">
+                <Lightbulb size={32} className="mx-auto text-stone-300 mb-3" />
+                <h3 className="text-base font-bold mb-2">Participación restringida</h3>
+                <p className="text-sm text-secondary mb-5">Necesitas un código de invitación para enviar resoluciones en este caso.</p>
+                <div className="flex justify-center gap-3">
+                  <button onClick={() => navigate('/unirse')} className="px-4 py-2 rounded-xl bg-primary text-white text-sm font-bold">Unirse con código</button>
+                  <button onClick={() => navigate('/casos')} className="px-4 py-2 rounded-xl border text-sm">Ver casos</button>
+                </div>
+              </div>
+            )}
           </div>
         </aside>
       </div>

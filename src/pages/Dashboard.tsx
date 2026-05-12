@@ -103,12 +103,22 @@ export function Dashboard() {
 
   // notifications for current user
   const { data: notes } = await (supabase.from as any)('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(5);
-  // fetch small lists for targeting
-  const { data: c } = await (supabase.from as any)('clinical_cases').select('id, title').limit(50);
-  const { data: cr } = await (supabase.from as any)('courses').select('id, name').limit(50);
-  setCasesList((c as any[]) ?? []);
-  setCoursesList((cr as any[]) ?? []);
         setQuickNotes((notes as any[]) ?? []);
+
+        // fetch cases list for targeting (regardless of teacher/student)
+        const { data: c } = await (supabase.from as any)('clinical_cases').select('id, title').limit(100);
+        setCasesList((c as any[]) ?? []);
+        // fetch courses list
+        const tablesForCourses = ['courses', 'grupos', 'clinical_groups', 'course_groups'];
+        for (const t of tablesForCourses) {
+          try {
+            const { data: cr, error: cre } = await (supabase.from as any)(t).select('id, name, nombre').limit(100);
+            if (!cre && cr && (cr as any[]).length > 0) {
+              setCoursesList((cr as any[]).map((x: any) => ({ id: x.id, name: x.name ?? x.nombre ?? String(x.id) })));
+              break;
+            }
+          } catch { /* try next */ }
+        }
       } catch (err) {
         console.warn('dashboard metrics error', err);
       }
@@ -137,27 +147,78 @@ export function Dashboard() {
   const createQuickNote = async () => {
     if (!newNote || !userId) return;
     try {
-      const payload: any = { title: 'Nota rápida', message: newNote };
-      if (targetType === 'case' && selectedCase) {
-        payload.case_id = selectedCase;
-        payload.user_id = userId; // still target a specific user for case (author)
-      }
+      let recipients: string[] = [];
+
       if (targetType === 'global') {
-        payload.user_id = userId;
+        // Try role_id = 3 first (most common schema), fallback to role text
+        let studentsData: any[] = [];
+        const { data: byRoleId } = await (supabase.from as any)('profiles').select('id').eq('role_id', 3).neq('id', userId);
+        if (byRoleId && (byRoleId as any[]).length > 0) {
+          studentsData = byRoleId as any[];
+        } else {
+          const { data: byRole } = await (supabase.from as any)('profiles').select('id').in('role', ['student', 'estudiante']).neq('id', userId);
+          studentsData = (byRole as any[]) ?? [];
+        }
+        // If still empty, just get all profiles that are not the current user
+        if (studentsData.length === 0) {
+          const { data: allProfiles } = await (supabase.from as any)('profiles').select('id').neq('id', userId).limit(500);
+          studentsData = (allProfiles as any[]) ?? [];
+        }
+        recipients = studentsData.map((s: any) => s.id).filter(Boolean);
+      } else if (targetType === 'case' && selectedCase) {
+        // Send to all students assigned to this case
+        const { data: assignments } = await (supabase.from as any)('case_assignments')
+          .select('user_id')
+          .eq('case_id', selectedCase);
+        const fromAssignments = (assignments as any[] ?? []).map((a: any) => a.user_id);
+        // Also anyone who used an invite
+        const { data: inviteUsers } = await (supabase.from as any)('case_invites')
+          .select('used_by')
+          .eq('case_id', selectedCase)
+          .not('used_by', 'is', null);
+        const fromInvites = (inviteUsers as any[] ?? []).map((i: any) => i.used_by);
+        recipients = [...new Set([...fromAssignments, ...fromInvites])].filter((id) => id && id !== userId);
+      } else if (targetType === 'course' && selectedCourse) {
+        // Send to all members of the course
+        const { data: members } = await (supabase.from as any)('course_members')
+          .select('user_id')
+          .eq('course_id', selectedCourse);
+        recipients = (members as any[] ?? []).map((m: any) => m.user_id).filter((id: string) => id !== userId);
       }
-      if (targetType === 'course' && selectedCourse) {
-        // For course broadcasts we intentionally omit user_id so the DB trigger distributes to members
-        payload.course_id = selectedCourse;
+
+      if (recipients.length === 0) {
+        alert('No se encontraron destinatarios para esta notificación.');
+        return;
       }
-      // Insert without .single() because the trigger may create multiple rows; do not assume single returned row
-      await (supabase.from as any)('notifications').insert(payload);
-      // refresh latest notifications for the user
+
+      const payloads = recipients.map((rid: string) => ({
+        user_id: rid,
+        title: 'Nota rápida',
+        message: newNote,
+        is_read: false,
+        ...(targetType === 'case' && selectedCase ? { case_id: selectedCase } : {}),
+        ...(targetType === 'course' && selectedCourse ? { course_id: selectedCourse } : {}),
+      }));
+
+      const { error } = await (supabase.from as any)('notifications').insert(payloads);
+      if (error) throw error;
+
+      // Also add to teacher's own feed for reference
+      await (supabase.from as any)('notifications').insert({
+        user_id: userId,
+        title: `Nota rápida enviada (${recipients.length} destinatarios)`,
+        message: newNote,
+        is_read: false,
+      });
+
+      // Refresh
       const { data: fresh } = await (supabase.from as any)('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(5);
       setQuickNotes((fresh as any[]) ?? []);
       setNewNote('');
-    } catch (err) {
+      alert(`✅ Notificación enviada a ${recipients.length} estudiante(s).`);
+    } catch (err: any) {
       console.warn('create note error', err);
-      alert('Error creando notificación');
+      alert('Error creando notificación: ' + (err?.message ?? String(err)));
     }
   };
 
@@ -194,32 +255,37 @@ export function Dashboard() {
           </div>
           
           <div className="space-y-4">
-            <div className="flex gap-2 items-center">
-              <input value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="Escribe una nota rápida..." className="flex-1 p-3 rounded-lg bg-surface-container-low outline-none" />
-              <select value={targetType} onChange={(e) => setTargetType(e.target.value as any)} className="p-2 border rounded">
-                <option value="global">Global</option>
-                <option value="case">Caso</option>
-                <option value="course">Grupo/Curso</option>
-              </select>
-              {targetType === 'case' && (
-                <select value={selectedCase ?? ''} onChange={(e) => setSelectedCase(e.target.value ? Number(e.target.value) : null)} className="p-2 border rounded">
-                  <option value="">Selecciona caso</option>
-                  {casesList.map((c) => (
-                    <option key={c.id} value={c.id}>{c.title ?? c.titulo ?? c.name}</option>
-                  ))}
+            {/* Only teachers can send quick notifications */}
+            {isTeacher && (
+              <div className="flex gap-2 items-center flex-wrap">
+                <input value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="Escribe una nota rápida..." className="flex-1 p-3 rounded-lg bg-surface-container-low outline-none min-w-[180px]" />
+                <select value={targetType} onChange={(e) => setTargetType(e.target.value as any)} className="p-2 border rounded">
+                  <option value="global">Todos los estudiantes</option>
+                  <option value="case">Por Caso</option>
+                  <option value="course">Por Grupo/Curso</option>
                 </select>
-              )}
-              {targetType === 'course' && (
-                <select value={selectedCourse ?? ''} onChange={(e) => setSelectedCourse(e.target.value ? Number(e.target.value) : null)} className="p-2 border rounded">
-                  <option value="">Selecciona grupo</option>
-                  {coursesList.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              )}
-              <button onClick={createQuickNote} className="px-4 py-2 bg-primary text-white rounded-lg">Enviar</button>
-            </div>
-            {quickNotes.map((n) => (
+                {targetType === 'case' && (
+                  <select value={selectedCase ?? ''} onChange={(e) => setSelectedCase(e.target.value ? Number(e.target.value) : null)} className="p-2 border rounded">
+                    <option value="">Selecciona caso</option>
+                    {casesList.map((c) => (
+                      <option key={c.id} value={c.id}>{c.title ?? c.titulo ?? c.name}</option>
+                    ))}
+                  </select>
+                )}
+                {targetType === 'course' && (
+                  <select value={selectedCourse ?? ''} onChange={(e) => setSelectedCourse(e.target.value ? Number(e.target.value) : null)} className="p-2 border rounded">
+                    <option value="">Selecciona grupo</option>
+                    {coursesList.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                )}
+                <button onClick={createQuickNote} className="px-4 py-2 bg-primary text-white rounded-lg">Enviar</button>
+              </div>
+            )}
+            {quickNotes.length === 0 ? (
+              <p className="text-sm text-secondary text-center py-4">Sin notificaciones recientes.</p>
+            ) : quickNotes.map((n) => (
               <div key={n.id} className="flex gap-4 items-start p-4 hover:bg-surface-container-low rounded-xl transition-all cursor-pointer group">
                 <div className={cn(
                   "w-2.5 h-2.5 rounded-full mt-2 flex-shrink-0",

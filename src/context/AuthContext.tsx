@@ -35,8 +35,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // fetch from profiles table
       const { data, error } = await supabase.from('profiles').select('*').eq('id', id).single();
       if (!error && data) {
+        console.log('[AuthContext] profile loaded:', JSON.stringify(data));
         setProfile(data as Profile);
       } else {
+        console.warn('[AuthContext] profile fetch error:', error);
         setProfile(null);
       }
     } catch (err) {
@@ -63,6 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const isTeacher = Boolean(profile?.role_id === 2 || profile?.role === 'teacher' || profile?.role === 'instructor');
+  console.log('[AuthContext] isTeacher:', isTeacher, '| role_id:', profile?.role_id, '| role:', profile?.role);
 
   return (
     <AuthContext.Provider value={{ loading, userId, profile, isTeacher, refreshProfile: () => fetchProfile(userId) }}>

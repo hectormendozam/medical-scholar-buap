@@ -67,11 +67,11 @@ export default function ClinicalCases() {
 
       <div className="grid grid-cols-1 gap-4">
         {cases.map((c) => (
-          <Link 
-            key={c.id} 
-            to={`/casos/${c.id}`}
-            className="group bg-white dark:bg-surface p-6 rounded-2xl ghost-border shadow-sm hover:shadow-md hover:border-primary/30 transition-all flex items-center justify-between"
-          >
+            <Link 
+              key={c.id} 
+              to={`/casos/${c.id}`}
+              className="group bg-white dark:bg-surface p-6 rounded-2xl ghost-border shadow-sm hover:shadow-md hover:border-primary/30 transition-all flex items-center justify-between"
+            >
             <div className="flex items-center gap-6">
               <div className="p-4 bg-primary/5 rounded-2xl text-primary group-hover:bg-primary group-hover:text-white transition-colors">
                 <Stethoscope className="w-6 h-6" />
@@ -99,8 +99,14 @@ export default function ClinicalCases() {
                   {c.estatus}
                 </span>
               </div>
-              <ChevronRight className="text-stone-300 group-hover:text-primary group-hover:translate-x-1 transition-all" />
-            </div>
+                <ChevronRight className="text-stone-300 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                {/* Unirse button visible for non-teachers (students) inside the card */}
+                {!isTeacher && (
+                  <div className="ml-4">
+                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.location.href = '/unirse'; }} className="px-3 py-2 bg-primary/10 text-primary rounded-full text-sm">Unirse</button>
+                  </div>
+                )}
+              </div>
           </Link>
         ))}
       </div>

@@ -40,14 +40,29 @@ export default function NewCase() {
   const [selectedCourse, setSelectedCourse] = useState<number | null>(null);
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [generatingInvite, setGeneratingInvite] = useState<boolean>(false);
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [inviteModalCode, setInviteModalCode] = useState<string | null>(null);
+  const [preGeneratedInviteCode, setPreGeneratedInviteCode] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      try {
-        const { data: cr } = await (supabase.from as any)('courses').select('id, name').limit(200);
-        setCoursesList((cr as any[]) ?? []);
-      } catch (err) {
-        console.warn('fetch courses error', err);
+      // Try several table names for groups/courses
+      const tablesToTry = [
+        { name: 'courses', labelCol: 'name' },
+        { name: 'grupos', labelCol: 'nombre' },
+        { name: 'clinical_groups', labelCol: 'name' },
+        { name: 'course_groups', labelCol: 'name' },
+      ];
+      for (const t of tablesToTry) {
+        try {
+          const { data: cr, error } = await (supabase.from as any)(t.name).select(`id, ${t.labelCol}`).limit(200);
+          if (!error && cr && (cr as any[]).length > 0) {
+            setCoursesList((cr as any[]).map((c: any) => ({ id: c.id, name: c[t.labelCol] ?? c.name ?? c.nombre ?? String(c.id) })));
+            break;
+          }
+        } catch (err) {
+          // table not found, try next
+        }
       }
     })();
   }, []);
@@ -114,64 +129,30 @@ export default function NewCase() {
       expireAt = estimatedMinutes > 0 ? new Date(Date.now() + estimatedMinutes * 60000).toISOString() : null;
     }
 
-    // helper to attempt insert and retry without unknown columns if the target table schema differs
+    // helper: insert payload dropping any unknown columns detected by the error message
     const safeInsert = async (tableName: string, payload: any) => {
-      const payloadCopy = { ...payload };
+      let currentPayload = { ...payload };
 
-      // Quick fast-path: try inserting as-is first. If it succeeds, great.
-      try {
-        const res: any = await (supabase.from as any)(tableName).insert(payloadCopy).select();
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const res: any = await (supabase.from as any)(tableName).insert(currentPayload).select();
+        if (!res.error) return res;
+
+        // Check if error is about an unknown column — strip it and retry
+        const msg: string = res.error?.message ?? '';
+        const match = msg.match(/Could not find the '(\w+)' column/);
+        if (match) {
+          const badCol = match[1];
+          console.warn(`[safeInsert] Dropping unknown column "${badCol}" from ${tableName}`);
+          const { [badCol]: _dropped, ...rest } = currentPayload;
+          currentPayload = rest;
+          continue;
+        }
+
+        // Any other error — return as-is
         return res;
-      } catch (err) {
-        // fallthrough to column-aware strategy
-        console.warn(`Initial insert into ${tableName} failed, attempting schema-aware insert`, err);
       }
 
-      // Attempt to SELECT all provided keys; some DBs will error if unknown columns are requested.
-      const keys = Object.keys(payloadCopy || {});
-      if (keys.length === 0) {
-        // nothing to insert
-        return { error: new Error('Empty payload') } as any;
-      }
-
-      // Try selecting all keys at once. If that errors, we'll probe individually.
-      try {
-        const selectCols = keys.join(', ');
-        const { error } = await (supabase.from as any)(tableName).select(selectCols).limit(1);
-        if (!error) {
-          // All columns appear present — try insert again but wrap in try/catch to return proper error
-          try {
-            const res2: any = await (supabase.from as any)(tableName).insert(payloadCopy).select();
-            return res2;
-          } catch (err2) {
-            return { error: err2 } as any;
-          }
-        }
-      } catch (err) {
-        // proceed to per-column probing
-      }
-
-      // Per-column probe: check each key and drop those that cause errors when selected
-      const allowed: string[] = [];
-      for (const k of keys) {
-        try {
-          const { error } = await (supabase.from as any)(tableName).select(k).limit(1);
-          if (!error) allowed.push(k);
-        } catch (err) {
-          // column not present or inaccessible; skip
-        }
-      }
-
-      // Build payload only with allowed keys
-      const cleaned: any = {};
-      allowed.forEach(k => { cleaned[k] = payloadCopy[k]; });
-
-      try {
-        const res3: any = await (supabase.from as any)(tableName).insert(cleaned).select();
-        return res3;
-      } catch (err) {
-        return { error: err } as any;
-      }
+      return { error: { message: 'Could not insert after stripping unknown columns' } };
     };
 
     let insertRes = await safeInsert('casos_clinicos', {
@@ -182,7 +163,7 @@ export default function NewCase() {
       sintomas,
       antecedentes,
       instructor_id: userId,
-      estatus: 'Pendiente',
+      estatus: 'Publicado',
       tiempo_estimado: `${estimatedMinutes} min`,
       expire_at: expireAt,
       course_id: selectedCourse ?? null
@@ -196,9 +177,12 @@ export default function NewCase() {
         initial_information: sintomas ?? null,
         clinical_history: antecedentes ?? null,
         symptoms: sintomas ?? null,
-        status: 'borrador',
+        tags: tags,
+        category: categoria,
+        level: nivel,
+        status: 'publicado',
         created_by: userId,
-        published_at: null,
+        published_at: new Date().toISOString(),
         estimated_minutes: estimatedMinutes,
         expire_at: expireAt,
         course_id: selectedCourse ?? null
@@ -212,6 +196,26 @@ export default function NewCase() {
       try {
         const inserted = (insertRes.data && (Array.isArray(insertRes.data) ? insertRes.data[0] : insertRes.data)) as any;
         const caseId = inserted?.id ?? inserted?.case_id ?? null;
+        // generate a case-specific invite code so students can join the case directly
+        try {
+          const code = preGeneratedInviteCode ?? generateRandomCode(8);
+          const { error: inviteErr } = await (supabase.from as any)('case_invites').insert({ case_id: caseId, code, created_by: userId }).select();
+          setInviteModalCode(code);
+          setInviteModalOpen(true);
+          // clear pre-generated after persisting
+          setPreGeneratedInviteCode(null);
+          if (!inviteErr) {
+            try { navigator.clipboard.writeText(code); } catch (e) { /* ignore */ }
+          }
+        } catch (err) {
+          console.warn('case invite creation failed', err);
+          // fallback: show the generated code even if insert failed
+          const code = preGeneratedInviteCode ?? generateRandomCode(8);
+          setInviteModalCode(code);
+          setInviteModalOpen(true);
+          setPreGeneratedInviteCode(null);
+          try { navigator.clipboard.writeText(code); } catch (e) { /* ignore */ }
+        }
   if (notifyNow && caseId) {
           // if a course was selected, notify only its members; otherwise notify all students
           if (selectedCourse) {
@@ -391,13 +395,22 @@ export default function NewCase() {
               </select>
               {selectedCourse && (
                 <div className="mt-3 flex items-center gap-3">
+                  <button type="button" onClick={() => { const c = generateRandomCode(8); setPreGeneratedInviteCode(c); try { navigator.clipboard.writeText(c); } catch(e){} }} className="px-3 py-2 rounded-xl bg-primary text-white text-sm">
+                    Generar código (pre)
+                  </button>
                   <button type="button" onClick={generateInviteCode} disabled={generatingInvite} className="px-3 py-2 rounded-xl bg-primary/10 text-primary text-sm">
-                    {generatingInvite ? 'Generando...' : 'Generar código de invitación'}
+                    {generatingInvite ? 'Generando...' : 'Persistir código en curso'}
                   </button>
                   {inviteCode && (
                     <div className="flex items-center gap-2 text-sm">
                       <div className="px-3 py-2 bg-surface-container-low rounded-md font-mono tracking-wide">{inviteCode}</div>
                       <button type="button" onClick={() => { navigator.clipboard.writeText(inviteCode); }} className="text-primary underline">Copiar</button>
+                    </div>
+                  )}
+                  {preGeneratedInviteCode && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <div className="px-3 py-2 bg-surface-container-low rounded-md font-mono tracking-wide">{preGeneratedInviteCode}</div>
+                      <button type="button" onClick={() => { navigator.clipboard.writeText(preGeneratedInviteCode); }} className="text-primary underline">Copiar</button>
                     </div>
                   )}
                 </div>
@@ -578,3 +591,31 @@ export default function NewCase() {
     </div>
   );
 }
+
+// Invite Code Modal component: appended to page file-level to keep code local
+function InviteModal({ open, code, onClose }: { open: boolean; code: string | null; onClose: () => void }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-xl w-[520px] p-6 transform transition-all duration-200 scale-100">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold">Código de acceso al caso</h3>
+            <p className="text-sm text-secondary mt-1">Comparte este código con tus estudiantes para que se unan al caso.</p>
+          </div>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600">✕</button>
+        </div>
+
+        <div className="mt-6 bg-surface-container-low p-4 rounded-md flex items-center justify-between">
+          <div className="font-mono text-xl tracking-widest">{code}</div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => { try { navigator.clipboard.writeText(code ?? ''); alert('Copiado'); } catch (e) { alert('Copia manual: ' + code); } }} className="px-3 py-2 bg-primary text-white rounded-md">Copiar</button>
+            <button onClick={onClose} className="px-3 py-2 border rounded-md">Cerrar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
