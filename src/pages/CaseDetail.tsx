@@ -319,54 +319,41 @@ export function CaseDetail() {
           }
         }
 
-        // Check for existing submission (separated queries to avoid join errors)
+        // Check for existing submission in case_resolutions
         if (userId && data?.id && !isTeacher) {
           let existing: any = null;
           let evalRow: any = null;
 
-          // 1. Try case_resolutions (no join)
           try {
             const { data: cr, error: crErr } = await (supabase.from as any)('case_resolutions')
               .select('*')
-              .eq('case_id', data.id).eq('resolved_by', userId).limit(1).maybeSingle();
+              .eq('case_id', data.id).eq('resolved_by', userId)
+              .order('created_at', { ascending: false })
+              .limit(1).maybeSingle();
             if (!crErr && cr) {
               existing = { ...cr, _table: 'case_resolutions' };
-              // Try to fetch evaluation separately
+              // Fetch evaluacion separately
               try {
-                const { data: ev } = await (supabase.from as any)('evaluations')
-                  .select('id, total_score, feedback')
-                  .eq('case_resolution_id', cr.id).limit(1).maybeSingle();
+                const { data: ev } = await (supabase.from as any)('evaluaciones')
+                  .select('id, calificacion, retroalimentacion')
+                  .eq('case_resolution_id', String(cr.id)).limit(1).maybeSingle();
                 if (ev) evalRow = ev;
-              } catch { /* evaluations table may not exist */ }
+              } catch { /* ignore */ }
             }
           } catch { /* ignore */ }
-
-          // 2. Try resoluciones if nothing found yet
-          if (!existing) {
-            try {
-              const { data: res, error: resErr } = await (supabase.from as any)('resoluciones')
-                .select('*')
-                .eq('caso_id', data.id).eq('estudiante_id', userId).limit(1).maybeSingle();
-              if (!resErr && res) {
-                existing = { ...res, _table: 'resoluciones' };
-                // Try to fetch evaluacion separately
-                try {
-                  const { data: ev } = await (supabase.from as any)('evaluaciones')
-                    .select('id, calificacion, retroalimentacion')
-                    .eq('resolucion_id', res.id).limit(1).maybeSingle();
-                  if (ev) evalRow = ev;
-                } catch { /* evaluaciones table may not exist */ }
-              }
-            } catch { /* ignore */ }
-          }
 
           if (mounted) {
             setExistingResolution(existing);
             setExistingGrade(evalRow);
             if (existing) {
-              setDiagnostico(existing.diagnostico ?? existing.resolution ?? '');
-              setPlanTerapeutico(existing.plan_terapeutico ?? '');
-              setJustificacion(existing.justificacion ?? existing.conclusion ?? '');
+              // resolution field stores "diagnostico\n\nPlan:\nplanTerapeutico"
+              const rawResolution = existing.resolution ?? '';
+              const planMatch = rawResolution.match(/\n\nPlan:\n([\s\S]*)$/);
+              const diagPart = planMatch ? rawResolution.replace(/\n\nPlan:\n[\s\S]*$/, '') : rawResolution;
+              const planPart = planMatch ? planMatch[1] : '';
+              setDiagnostico(diagPart);
+              setPlanTerapeutico(planPart);
+              setJustificacion(existing.conclusion ?? '');
             }
           }
         }
@@ -405,63 +392,48 @@ export function CaseDetail() {
       const { data: userData } = await supabase.auth.getUser();
       const uid = (userData as any)?.user?.id ?? userId ?? null;
 
-      // Si ya existe una entrega → UPDATE en lugar de DELETE+INSERT
-      // Así conservamos el ID original y las evaluaciones previas siguen apuntando a él.
+      // Si ya existe una entrega → UPDATE
       if (isEditing && existingResolution) {
-        const updatedFields = existingResolution._table === 'case_resolutions'
-          ? { resolution: diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : ''), conclusion: justificacion }
-          : { diagnostico, plan_terapeutico: planTerapeutico, justificacion, estatus: 'En Revisión' };
-
-        const { error: upErr } = await (supabase.from as any)(existingResolution._table)
-          .update(updatedFields)
-          .eq('id', existingResolution.id);
+        const newResolution = diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : '');
+        const { data: updatedRows, error: upErr } = await (supabase.from as any)('case_resolutions')
+          .update({ resolution: newResolution, conclusion: justificacion })
+          .eq('id', existingResolution.id)
+          .select();
 
         if (upErr) {
           alert('Error al actualizar: ' + upErr.message);
+        } else if (!updatedRows || (updatedRows as any[]).length === 0) {
+          // RLS bloqueó el UPDATE — hacer DELETE + INSERT como fallback
+          await (supabase.from as any)('case_resolutions').delete().eq('id', existingResolution.id);
+          const { data: newRow, error: insErr } = await (supabase.from as any)('case_resolutions')
+            .insert({ case_id: caso.id, resolved_by: uid, resolution: newResolution, conclusion: justificacion })
+            .select().maybeSingle();
+          if (insErr) {
+            alert('Error al guardar: ' + insErr.message + '\n\nEjecuta db/2026_05_18_fix_rls_update_resoluciones.sql en Supabase.');
+          } else {
+            setExistingResolution({ ...(newRow ?? existingResolution), resolution: newResolution, conclusion: justificacion, _table: 'case_resolutions' });
+            setIsEditing(false);
+            alert('¡Resolución actualizada correctamente!');
+          }
         } else {
-          // Actualizar el estado local para que la vista de solo-lectura muestre los nuevos valores
-          const updatedResolution = {
-            ...existingResolution,
-            ...(existingResolution._table === 'case_resolutions'
-              ? { resolution: diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : ''), conclusion: justificacion }
-              : { diagnostico, plan_terapeutico: planTerapeutico, justificacion }),
-          };
-          setExistingResolution(updatedResolution);
+          setExistingResolution({ ...existingResolution, resolution: newResolution, conclusion: justificacion });
           setIsEditing(false);
           alert('¡Resolución actualizada correctamente!');
         }
         return;
       }
 
-      // Primera vez enviando: INSERT
-      let res: any = await (supabase.from as any)('resoluciones').insert({
-        estudiante_id: uid,
-        caso_id: caso.id,
-        diagnostico,
-        plan_terapeutico: planTerapeutico,
-        justificacion,
-        estatus: 'En Revisión'
-      }).select();
+      // Primera vez enviando: INSERT en case_resolutions
+      const newResolution = diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : '');
+      const { data: insertedData, error: insErr } = await (supabase.from as any)('case_resolutions')
+        .insert({ case_id: caso.id, resolved_by: uid, resolution: newResolution, conclusion: justificacion })
+        .select();
 
-      if (res.error) {
-        console.warn('[submitResolution] resoluciones failed:', res.error.message, '— trying case_resolutions...');
-        res = await (supabase.from as any)('case_resolutions').insert({
-          case_id: caso.id,
-          resolved_by: uid,
-          resolution: diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : ''),
-          conclusion: justificacion
-        }).select();
-        console.log('[submitResolution] case_resolutions result:', res.data, res.error);
+      if (insErr) {
+        alert('Error al enviar: ' + (insErr.message ?? String(insErr)));
       } else {
-        console.log('[submitResolution] resoluciones OK:', res.data);
-      }
-
-      if (res.error) {
-        alert('Error al enviar: ' + (res.error.message ?? String(res.error)));
-      } else {
-        const inserted = Array.isArray(res.data) ? res.data[0] : res.data;
-        const table = inserted?.caso_id !== undefined ? 'resoluciones' : 'case_resolutions';
-        setExistingResolution(inserted ? { ...inserted, _table: table } : null);
+        const inserted = Array.isArray(insertedData) ? insertedData[0] : insertedData;
+        setExistingResolution(inserted ? { ...inserted, _table: 'case_resolutions' } : null);
         alert('¡Resolución enviada correctamente!');
       }
     } catch (err: any) {
@@ -900,30 +872,43 @@ export function CaseDetail() {
                     <div className="flex items-center gap-2 text-amber-600 text-sm font-bold">
                       <Lock size={14} /> Decisión enviada — solo lectura
                     </div>
-                    <div className="space-y-4">
-                      <div>
-                        <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><Stethoscope size={10} /> Diagnóstico</p>
-                        <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{existingResolution.diagnostico ?? existingResolution.resolution ?? '—'}</p>
-                      </div>
-                      {(existingResolution.plan_terapeutico) && (
-                        <div>
-                          <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><Activity size={10} /> Plan Terapéutico</p>
-                          <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{existingResolution.plan_terapeutico}</p>
+                    {/* Parse resolution field: "diagnostico\n\nPlan:\nplan" */}
+                    {(() => {
+                      const raw = existingResolution.resolution ?? '';
+                      const planMatch = raw.match(/\n\nPlan:\n([\s\S]*)$/);
+                      const diagText = planMatch ? raw.replace(/\n\nPlan:\n[\s\S]*$/, '') : raw;
+                      const planText = planMatch ? planMatch[1] : '';
+                      const justText = existingResolution.conclusion ?? '';
+                      return (
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><Stethoscope size={10} /> Diagnóstico</p>
+                            <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{diagText || '—'}</p>
+                          </div>
+                          {planText && (
+                            <div>
+                              <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><Activity size={10} /> Plan Terapéutico</p>
+                              <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{planText}</p>
+                            </div>
+                          )}
+                          {justText && (
+                            <div>
+                              <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><History size={10} /> Justificación</p>
+                              <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{justText}</p>
+                            </div>
+                          )}
                         </div>
-                      )}
-                      <div>
-                        <p className="text-[10px] font-black text-secondary uppercase tracking-widest flex items-center gap-1 mb-1"><History size={10} /> Justificación</p>
-                        <p className="text-sm bg-surface-container-low rounded-2xl p-4 whitespace-pre-wrap">{existingResolution.justificacion ?? existingResolution.conclusion ?? '—'}</p>
-                      </div>
-                    </div>
+                      );
+                    })()}
                     {!existingGrade && (
                       <button
                         onClick={() => {
-                          // Rellenar formulario con los valores actuales antes de editar
                           if (existingResolution) {
-                            setDiagnostico(existingResolution.diagnostico ?? existingResolution.resolution ?? '');
-                            setPlanTerapeutico((existingResolution as any).plan_terapeutico ?? '');
-                            setJustificacion(existingResolution.justificacion ?? existingResolution.conclusion ?? '');
+                            const raw = existingResolution.resolution ?? '';
+                            const planMatch = raw.match(/\n\nPlan:\n([\s\S]*)$/);
+                            setDiagnostico(planMatch ? raw.replace(/\n\nPlan:\n[\s\S]*$/, '') : raw);
+                            setPlanTerapeutico(planMatch ? planMatch[1] : '');
+                            setJustificacion(existingResolution.conclusion ?? '');
                           }
                           setIsEditing(true);
                         }}

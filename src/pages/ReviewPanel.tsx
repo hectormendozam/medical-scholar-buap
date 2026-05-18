@@ -48,29 +48,34 @@ interface Rubric {
 async function fetchAllResolutions(): Promise<Resolution[]> {
   let combined: Resolution[] = [];
 
-  // 1. case_resolutions
+  // case_resolutions — única tabla de entregas
   try {
     const { data, error } = await (supabase.from as any)('case_resolutions')
       .select('*')
       .order('created_at', { ascending: false });
     if (!error && data) {
-      combined = [
-        ...combined,
-        ...(data as any[]).map((r: any) => ({
+      combined = (data as any[]).map((r: any) => {
+        // resolution = "diagnostico\n\nPlan:\nplanTerapeutico"
+        const raw = r.resolution ?? '';
+        const planMatch = raw.match(/\n\nPlan:\n([\s\S]*)$/);
+        const diagText = planMatch ? raw.replace(/\n\nPlan:\n[\s\S]*$/, '') : raw;
+        const planText = planMatch ? planMatch[1] : '';
+        return {
           id: String(r.id),
           caseId: r.case_id,
           userId: r.resolved_by ?? '',
           userName: '',
           fechaEntrega: r.created_at,
-          diagnostico: r.resolution ?? '',
-          planTerapeutico: '',
+          diagnostico: diagText,
+          planTerapeutico: planText,
           justificacion: r.conclusion ?? '',
           calificacion: null,
           retroalimentacion: null,
           evaluacionId: null,
           _table: 'case_resolutions' as const,
-        })),
-      ];
+        };
+      });
+
       // Enrich with evaluaciones
       try {
         const ids = (data as any[]).map((r: any) => String(r.id));
@@ -89,52 +94,6 @@ async function fetchAllResolutions(): Promise<Resolution[]> {
     }
   } catch (e) {
     console.warn('[ReviewPanel] case_resolutions:', e);
-  }
-
-  // 2. resoluciones
-  try {
-    const { data, error } = await (supabase.from as any)('resoluciones')
-      .select('*')
-      .order('fecha_entrega', { ascending: false });
-    if (!error && data) {
-      const resolRows: Resolution[] = (data as any[]).map((r: any) => ({
-        id: String(r.id),
-        caseId: r.caso_id ?? r.case_id,
-        userId: r.estudiante_id ?? r.resolved_by ?? '',
-        userName: '',
-        fechaEntrega: r.fecha_entrega ?? r.created_at,
-        diagnostico: r.diagnostico ?? r.resolution ?? '',
-        planTerapeutico: r.plan_terapeutico ?? '',
-        justificacion: r.justificacion ?? r.conclusion ?? '',
-        calificacion: null,
-        retroalimentacion: null,
-        evaluacionId: null,
-        _table: 'resoluciones' as const,
-      }));
-      try {
-        const ids = resolRows.map((r) => r.id);
-        if (ids.length > 0) {
-          const { data: evals } = await (supabase.from as any)('evaluaciones')
-            .select('id, resolucion_id, calificacion, retroalimentacion')
-            .in('resolucion_id', ids);
-          const evalMap: Record<string, any> = {};
-          ((evals as any[]) ?? []).forEach((e: any) => { evalMap[String(e.resolucion_id)] = e; });
-          combined = [
-            ...combined,
-            ...resolRows.map((r) => {
-              const ev = evalMap[r.id];
-              return ev ? { ...r, calificacion: ev.calificacion ?? null, retroalimentacion: ev.retroalimentacion ?? null, evaluacionId: String(ev.id) } : r;
-            }),
-          ];
-        } else {
-          combined = [...combined, ...resolRows];
-        }
-      } catch {
-        combined = [...combined, ...resolRows];
-      }
-    }
-  } catch (e) {
-    console.warn('[ReviewPanel] resoluciones:', e);
   }
 
   return combined.sort((a, b) => new Date(b.fechaEntrega).getTime() - new Date(a.fechaEntrega).getTime());
