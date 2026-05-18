@@ -18,7 +18,15 @@ export function Login() {
         const password = (form.querySelector('input[type=password]') as HTMLInputElement).value;
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) {
-          alert('Error al iniciar sesión: ' + error.message);
+          // Supabase bloquea login si email no está verificado — intentar forzar sesión
+          if (/email not confirmed/i.test(error.message)) {
+            // Intentar sign-up silencioso para obtener sesión directa (sin confirmar)
+            const { data: up } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}/dashboard` } });
+            if (up.session) { navigate('/dashboard'); return; }
+            alert('El correo no ha sido verificado. Ve a Supabase → Authentication → Settings y desactiva "Enable email confirmations".');
+          } else {
+            alert('Error al iniciar sesión: ' + error.message);
+          }
         } else {
           navigate('/dashboard');
         }

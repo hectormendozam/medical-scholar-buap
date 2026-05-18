@@ -19,7 +19,7 @@ const navItems = [
   { icon: LayoutDashboard, label: 'Menú Principal', to: '/dashboard' },
   { icon: Stethoscope, label: 'Casos Clínicos', to: '/casos' },
   { icon: FolderOpen, label: 'Expedientes', to: '/expedientes' },
-  { icon: LayoutGrid, label: 'Revisiones', to: '/revisiones' },
+  { icon: LayoutGrid, label: 'Revisiones', to: '/revisiones', teacherOnly: true },
   { icon: Bell, label: 'Notificaciones', to: '/notificaciones' },
   { icon: Settings, label: 'Configuración', to: '/configuracion' },
 ];
@@ -51,7 +51,7 @@ export function Sidebar({ mobileOpen, onClose }: { mobileOpen?: boolean; onClose
       </div>
 
       <nav className="flex-1 flex flex-col gap-1">
-        {navItems.map((item) => (
+        {navItems.filter(item => !item.teacherOnly || isTeacher).map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -108,7 +108,7 @@ export function Sidebar({ mobileOpen, onClose }: { mobileOpen?: boolean; onClose
               <p className="text-secondary text-[10px] font-label uppercase tracking-widest mt-1">Gestión Académica</p>
             </div>
             <nav className="flex flex-col gap-1">
-              {navItems.map((item) => (
+              {navItems.filter(item => !item.teacherOnly || isTeacher).map((item) => (
                 <NavLink key={item.to} to={item.to} onClick={onClose} className={({ isActive }) => cn("flex items-center gap-3 px-3 py-3 rounded-lg transition-all duration-200 ease-in-out font-medium text-sm", isActive ? "bg-surface-container-high text-primary border-r-4 border-primary font-bold" : "text-secondary hover:bg-surface-container-high hover:text-primary") }>
                   <item.icon size={20} />
                   <span className="font-sans">{item.label}</span>

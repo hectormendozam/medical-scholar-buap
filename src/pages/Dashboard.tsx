@@ -35,23 +35,55 @@ export function Dashboard() {
 
   useEffect(() => {
     async function fetchCases() {
-      let res = await supabase.from('casos_clinicos').select('*').limit(4);
-      if (!res.data || res.error) {
-        res = await supabase.from('clinical_cases').select('*').limit(4);
-      }
+      if (!userId) return;
 
-      if (res.data) {
-        const normalized = (res.data as any[]).map((r) => ({
-          id: r.id != null ? String(r.id) : '',
-          titulo: r.titulo ?? r.title ?? '',
-          categoria: r.categoria ?? r.category ?? null,
-          nombre_paciente: r.nombre_paciente ?? null,
-          estatus: r.estatus ?? r.status ?? 'borrador',
-          created_at: r.created_at ?? r.published_at ?? null,
-          __raw: r,
-        }));
-        setAssignedCases(normalized as unknown as CasoClinico[]);
+      if (isTeacher) {
+        // Instructor: sus propios casos
+        const { data } = await (supabase.from as any)('clinical_cases')
+          .select('*')
+          .eq('created_by', userId)
+          .order('created_at', { ascending: false })
+          .limit(4);
+        normalizeCases(data ?? []);
+      } else {
+        // Estudiante: case_assignments directas + casos del grupo (course_members → clinical_cases.course_id)
+        const [assignRes, memberRes] = await Promise.all([
+          (supabase.from as any)('case_assignments').select('case_id').eq('user_id', userId),
+          (supabase.from as any)('course_members').select('course_id').eq('user_id', userId),
+        ]);
+
+        const caseIdsFromAssign: number[] = (assignRes.data ?? []).map((a: any) => a.case_id);
+
+        const courseIds: number[] = (memberRes.data ?? []).map((m: any) => m.course_id);
+        let caseIdsFromCourse: number[] = [];
+        if (courseIds.length > 0) {
+          const { data: courseCases } = await (supabase.from as any)('clinical_cases')
+            .select('id').in('course_id', courseIds);
+          caseIdsFromCourse = (courseCases ?? []).map((c: any) => c.id);
+        }
+
+        const allCaseIds = [...new Set([...caseIdsFromAssign, ...caseIdsFromCourse])];
+        if (allCaseIds.length === 0) { setAssignedCases([]); return; }
+
+        const { data } = await (supabase.from as any)('clinical_cases')
+          .select('*')
+          .in('id', allCaseIds)
+          .order('created_at', { ascending: false })
+          .limit(4);
+        normalizeCases(data ?? []);
       }
+    }
+    function normalizeCases(raw: any[]) {
+      const normalized = raw.map((r) => ({
+        id: r.id != null ? String(r.id) : '',
+        titulo: r.titulo ?? r.title ?? '',
+        categoria: r.categoria ?? r.category ?? null,
+        nombre_paciente: r.nombre_paciente ?? null,
+        estatus: r.estatus ?? r.status ?? 'borrador',
+        created_at: r.created_at ?? r.published_at ?? null,
+        __raw: r,
+      }));
+      setAssignedCases(normalized as unknown as CasoClinico[]);
     }
     fetchCases();
   // fetch metrics and notifications
@@ -62,63 +94,95 @@ export function Dashboard() {
         if (isTeacher) {
           // get cases created by teacher
           const { data: casesData } = await (supabase.from as any)('clinical_cases').select('id').eq('created_by', userId);
-          const caseIds = (casesData || []).map((c: any) => c.id);
+          const caseIds = (casesData ?? []).map((c: any) => c.id);
+          const caseIdsOrFake = caseIds.length ? caseIds : [-1];
 
-          // total submissions for those cases
-          const { count: total } = await (supabase.from as any)('resoluciones').select('id', { count: 'exact', head: true }).in('case_id', caseIds.length ? caseIds : [-1]);
-          const { count: graded } = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).eq('instructor_id', userId);
-          const passing = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).eq('instructor_id', userId).gte('calificacion', 6);
-          const passingCount = passing.count ?? 0;
+          // Total entregas en ambas tablas (case_resolutions + resoluciones)
+          const [crCount, resCount] = await Promise.all([
+            (supabase.from as any)('case_resolutions').select('id', { count: 'exact', head: true }).in('case_id', caseIdsOrFake),
+            (supabase.from as any)('resoluciones').select('id', { count: 'exact', head: true }).in('caso_id', caseIdsOrFake),
+          ]);
+          const totalNum = (crCount.count ?? 0) + (resCount.count ?? 0);
 
-          const totalNum = total ?? 0;
-          const gradedNum = graded ?? 0;
+          // Evaluaciones hechas por este instructor
+          const { data: evalsData } = await (supabase.from as any)('evaluaciones')
+            .select('id, calificacion').eq('instructor_id', userId);
+          const allEvals: any[] = evalsData ?? [];
+          const gradedNum   = allEvals.length;
+          const passingCount = allEvals.filter((e: any) => (e.calificacion ?? 0) >= 60).length;
+
           setTotalSubmissions(totalNum);
           setGradedCount(gradedNum);
           setPendingCount(Math.max(0, totalNum - gradedNum));
           setPassRate(gradedNum > 0 ? Math.round((passingCount / gradedNum) * 100) : 0);
 
-          // weekly: evaluations by this instructor in last 7 days
-          const { count: weekly } = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).eq('instructor_id', userId).gte('created_at', new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
+          // weekly: evaluaciones hechas por este instructor en los últimos 7 días
+          const { count: weekly } = await (supabase.from as any)('evaluaciones')
+            .select('id', { count: 'exact', head: true })
+            .eq('instructor_id', userId)
+            .gte('created_at', new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
           const weeklyNum = weekly ?? 0;
           const target = 10;
           setWeeklyProgress({ percent: Math.min(100, Math.round((weeklyNum / target) * 100)), resolved: weeklyNum, target });
         } else {
-          // student metrics
-          const { count: total } = await (supabase.from as any)('resoluciones').select('id', { count: 'exact', head: true }).eq('estudiante_id', userId);
-          const { data: evals } = await (supabase.from as any)('resoluciones').select('*, evaluaciones ( calificacion )').eq('estudiante_id', userId);
-          const totalNum = total ?? 0;
-          const gradedNum = (evals || []).filter((r: any) => r.evaluaciones && r.evaluaciones.length > 0).length;
-          const passingCount = (evals || []).filter((r: any) => r.evaluaciones && r.evaluaciones[0]?.calificacion >= 6).length;
+          // student metrics — queries separadas (los FKs en evaluaciones son lógicos, no reales)
+          const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+
+          // 1. Obtener todas las entregas del estudiante (ambas tablas)
+          const [crRes, resRes] = await Promise.all([
+            (supabase.from as any)('case_resolutions').select('id, created_at').eq('resolved_by', userId),
+            (supabase.from as any)('resoluciones').select('id, created_at').eq('estudiante_id', userId),
+          ]);
+
+          const crRows: any[]  = crRes.data  ?? [];
+          const resRows: any[] = resRes.data ?? [];
+          const totalNum = crRows.length + resRows.length;
+
+          // 2. Obtener evaluaciones asociadas a esas entregas (queries separadas)
+          const crIds  = crRows.map((r: any) => String(r.id));
+          const resIds = resRows.map((r: any) => String(r.id));
+
+          const [evCr, evRes] = await Promise.all([
+            crIds.length  > 0 ? (supabase.from as any)('evaluaciones').select('case_resolution_id, calificacion').in('case_resolution_id', crIds)  : { data: [] },
+            resIds.length > 0 ? (supabase.from as any)('evaluaciones').select('resolucion_id, calificacion').in('resolucion_id', resIds) : { data: [] },
+          ]);
+
+          const allEvals = [...(evCr.data ?? []), ...(evRes.data ?? [])];
+          const gradedNum   = allEvals.length;
+          // calificacion en DB es sobre 100; umbral de aprobación = 60
+          const passingCount = allEvals.filter((e: any) => (e.calificacion ?? 0) >= 60).length;
+
           setTotalSubmissions(totalNum);
           setGradedCount(gradedNum);
           setPendingCount(Math.max(0, totalNum - gradedNum));
           setPassRate(gradedNum > 0 ? Math.round((passingCount / gradedNum) * 100) : 0);
 
-          // weekly: evaluations for student's submissions in last 7 days
-          const { count: weekly } = await (supabase.from as any)('evaluaciones').select('id', { count: 'exact', head: true }).gte('created_at', new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString());
-          const weeklyNum = weekly ?? 0;
+          // weekly: entregas de los últimos 7 días
+          const weeklyNum = [...crRows, ...resRows].filter((r: any) => (r.created_at ?? '') >= weekAgo).length;
           const target = 5;
           setWeeklyProgress({ percent: Math.min(100, Math.round((weeklyNum / target) * 100)), resolved: weeklyNum, target });
         }
 
   // notifications for current user
-  const { data: notes } = await (supabase.from as any)('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(5);
+  const last24h = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const { data: notes } = await (supabase.from as any)('notifications').select('*').eq('user_id', userId).gte('created_at', last24h).order('created_at', { ascending: false }).limit(5);
         setQuickNotes((notes as any[]) ?? []);
 
-        // fetch cases list for targeting (regardless of teacher/student)
-        const { data: c } = await (supabase.from as any)('clinical_cases').select('id, title').limit(100);
+        // fetch cases list for targeting (solo los del instructor actual)
+        const { data: c } = await (supabase.from as any)('clinical_cases')
+          .select('id, title')
+          .eq('created_by', userId)
+          .order('created_at', { ascending: false })
+          .limit(100);
         setCasesList((c as any[]) ?? []);
-        // fetch courses list
-        const tablesForCourses = ['courses', 'grupos', 'clinical_groups', 'course_groups'];
-        for (const t of tablesForCourses) {
-          try {
-            const { data: cr, error: cre } = await (supabase.from as any)(t).select('id, name, nombre').limit(100);
-            if (!cre && cr && (cr as any[]).length > 0) {
-              setCoursesList((cr as any[]).map((x: any) => ({ id: x.id, name: x.name ?? x.nombre ?? String(x.id) })));
-              break;
-            }
-          } catch { /* try next */ }
-        }
+
+        // fetch groups/courses created by this instructor
+        const { data: cr } = await (supabase.from as any)('courses')
+          .select('id, name')
+          .eq('created_by', userId)
+          .order('created_at', { ascending: false })
+          .limit(100);
+        setCoursesList(((cr as any[]) ?? []).map((x: any) => ({ id: x.id, name: x.name ?? String(x.id) })));
       } catch (err) {
         console.warn('dashboard metrics error', err);
       }
@@ -133,7 +197,7 @@ export function Dashboard() {
         console.warn('profile fetch error', err);
       }
     })();
-  }, []);
+  }, [userId, isTeacher]);
 
   const markAsRead = async (id: number) => {
     try {
@@ -275,6 +339,7 @@ export function Dashboard() {
                 {targetType === 'course' && (
                   <select value={selectedCourse ?? ''} onChange={(e) => setSelectedCourse(e.target.value ? Number(e.target.value) : null)} className="p-2 border rounded">
                     <option value="">Selecciona grupo</option>
+                    {coursesList.length === 0 && <option disabled>Sin grupos creados</option>}
                     {coursesList.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}

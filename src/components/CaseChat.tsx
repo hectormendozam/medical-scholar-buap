@@ -83,13 +83,19 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
         try {
           const ids = Array.from(new Set(normalized.map(m => m.user_id).filter(Boolean)));
           if (ids.length > 0) {
-            const { data: profs } = await (supabase.from as any)('profiles').select('id, full_name, avatar_url').in('id', ids).limit(200);
+            const { data: profs } = await (supabase.from as any)('profiles').select('id, full_name, email, username, avatar_url').in('id', ids).limit(200);
             const profsArr = (profs || []) as any[];
             setParticipants(profsArr);
             // update any messages that lack user_name using fetched profiles
             const byId: Record<string, any> = {};
             profsArr.forEach(p => { byId[p.id] = p; });
-            setMessages((prev) => prev.map(m => ({ ...m, user_name: (m.user_id && byId[m.user_id]) ? byId[m.user_id].full_name : m.user_name })));
+            setMessages((prev) => prev.map(m => {
+              if (!m.user_id || m.user_name) return m;
+              const p = byId[m.user_id];
+              if (!p) return m;
+              const name = [p.full_name, p.username, p.email?.split('@')[0]].filter(Boolean).find(Boolean) ?? null;
+              return { ...m, user_name: name };
+            }));
           } else {
             setParticipants([]);
           }
@@ -105,14 +111,27 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
         const subscription = supabase.channel(`public:chat_messages:${numericCaseId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `case_id=eq.${numericCaseId}` }, (payload) => {
         const d: any = payload.new;
-        const normalized = { id: String(d.id), case_id: d.case_id, user_id: d.user_id, message: d.message, created_at: d.created_at, user_name: d.profiles?.full_name ?? null, attachments: [] };
+        // Realtime payloads don't include JOIN data, so user_name starts null
+        const normalized = { id: String(d.id), case_id: d.case_id, user_id: d.user_id, message: d.message, created_at: d.created_at, user_name: null as string | null, attachments: [] };
         setMessages((m) => [...m, normalized]);
-        // update participants list using functional update to avoid stale closures
+        // Resolve the sender's name: check participants cache first, then fetch
         if (d.user_id) {
           (async () => {
             try {
-              const { data: prof } = await (supabase.from as any)('profiles').select('id, full_name, avatar_url').eq('id', d.user_id).limit(1).single();
+              const { data: prof } = await (supabase.from as any)('profiles')
+                .select('id, full_name, email, username, avatar_url')
+                .eq('id', d.user_id)
+                .limit(1)
+                .single();
               if (prof) {
+                const name = [prof.full_name, prof.username, prof.email?.split('@')[0]]
+                  .filter(Boolean)
+                  .find((s: string) => s?.trim()) ?? null;
+                // Update the message with the resolved name
+                setMessages((prev) => prev.map((m) =>
+                  m.id === String(d.id) ? { ...m, user_name: name } : m
+                ));
+                // Update participants cache
                 setParticipants((prev) => {
                   if (prev.find(p => p.id === prof.id)) return prev;
                   return [...prev, prof];
@@ -244,7 +263,7 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
               try {
                 const ids = Array.from(new Set(normalized.map(m => m.user_id).filter(Boolean)));
                 if (ids.length > 0) {
-                  const { data: profs } = await (supabase.from as any)('profiles').select('id, full_name, avatar_url').in('id', ids).limit(200);
+                  const { data: profs } = await (supabase.from as any)('profiles').select('id, full_name, email, username, avatar_url').in('id', ids).limit(200);
                   const profsArr = (profs || []) as any[];
                   setParticipants(prev => {
                     const map: Record<string, any> = {};
@@ -254,7 +273,13 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
                   });
                   const byId: Record<string, any> = {};
                   profsArr.forEach(p => { byId[p.id] = p; });
-                  setMessages(prev => prev.map(m => ({ ...m, user_name: (m.user_id && byId[m.user_id]) ? byId[m.user_id].full_name : m.user_name })));
+                  setMessages(prev => prev.map(m => {
+                    if (!m.user_id || m.user_name) return m;
+                    const p = byId[m.user_id];
+                    if (!p) return m;
+                    const name = [p.full_name, p.username, p.email?.split('@')[0]].filter(Boolean).find(Boolean) ?? null;
+                    return { ...m, user_name: name };
+                  }));
                 }
               } catch (err) { console.warn('load older participants fetch failed', err); }
             } catch (err) { console.warn('load older error', err); }
@@ -265,7 +290,11 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
         {messages.map((msg) => (
           <div key={msg.id} className={cn("flex flex-col", msg.user_id === userId ? "items-end" : "items-start")}>
             <div className="flex items-center gap-2 mb-1">
-              {msg.user_id !== userId && <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">{msg.user_name ?? 'Usuario'}</span>}
+              {msg.user_id !== userId && msg.user_name && (
+                <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">
+                  {msg.user_name}
+                </span>
+              )}
               <span className="text-[9px] text-stone-300">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             </div>
             <div className={cn(

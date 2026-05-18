@@ -30,10 +30,7 @@ export default function NewCase() {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
 
-  // estimated duration (minutes) and notify option
-  const [estimatedMinutes, setEstimatedMinutes] = useState<number>(45);
-  const [notifyNow, setNotifyNow] = useState<boolean>(false);
-  // optional longer expiry as datetime-local
+  // optional expiry as datetime-local
   const [expireDateTime, setExpireDateTime] = useState<string>('');
   // course select
   const [coursesList, setCoursesList] = useState<any[]>([]);
@@ -126,7 +123,7 @@ export default function NewCase() {
         expireAt = null;
       }
     } else {
-      expireAt = estimatedMinutes > 0 ? new Date(Date.now() + estimatedMinutes * 60000).toISOString() : null;
+      expireAt = null;
     }
 
     // helper: insert payload dropping any unknown columns detected by the error message
@@ -164,7 +161,6 @@ export default function NewCase() {
       antecedentes,
       instructor_id: userId,
       estatus: 'Publicado',
-      tiempo_estimado: `${estimatedMinutes} min`,
       expire_at: expireAt,
       course_id: selectedCourse ?? null
     } as any);
@@ -183,7 +179,7 @@ export default function NewCase() {
         status: 'publicado',
         created_by: userId,
         published_at: new Date().toISOString(),
-        estimated_minutes: estimatedMinutes,
+        estimated_minutes: null,
         expire_at: expireAt,
         course_id: selectedCourse ?? null
       } as any);
@@ -216,22 +212,8 @@ export default function NewCase() {
           setPreGeneratedInviteCode(null);
           try { navigator.clipboard.writeText(code); } catch (e) { /* ignore */ }
         }
-  if (notifyNow && caseId) {
-          // if a course was selected, notify only its members; otherwise notify all students
-          if (selectedCourse) {
-            const { data: members, error: membersErr } = await (supabase.from as any)('course_members').select('user_id').eq('course_id', selectedCourse);
-            if (!membersErr && Array.isArray(members) && members.length > 0) {
-              const payloads = members.map((m: any) => ({
-                user_id: m.user_id,
-                title: `Nuevo caso en tu grupo: ${titulo}`,
-                body: sintomas?.slice(0, 240) || 'Nuevo caso clínico disponible en tu grupo',
-                case_id: caseId,
-                read: false
-              }));
-              const { error: notifErr } = await (supabase.from as any)('notifications').insert(payloads);
-              if (notifErr) console.warn('notifyNow course insert error', notifErr);
-            }
-              // store uploaded files in normalized case_files table
+  if (caseId) {
+          // store uploaded files in normalized case_files table
               try {
                 const filesToInsert = [...images, ...pdfs].map((f: any) => ({
                   case_id: caseId,
@@ -248,20 +230,6 @@ export default function NewCase() {
               } catch (err) {
                 console.warn('case_files unexpected', err);
               }
-          } else {
-            const { data: students, error: studentsErr } = await (supabase.from as any)('profiles').select('id').eq('role', 'student');
-            if (!studentsErr && Array.isArray(students) && students.length > 0) {
-              const payloads = students.map((s: any) => ({
-                user_id: s.id,
-                title: `Nuevo caso: ${titulo}`,
-                body: sintomas?.slice(0, 240) || 'Nuevo caso clínico disponible',
-                case_id: caseId,
-                read: false
-              }));
-              const { error: notifErr } = await (supabase.from as any)('notifications').insert(payloads);
-              if (notifErr) console.warn('notifyNow insert error', notifErr);
-            }
-          }
         }
       } catch (notifyErr) {
         console.warn('notifyNow unexpected', notifyErr);
@@ -473,20 +441,7 @@ export default function NewCase() {
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-stone-400 ml-1">Tiempo estimado (minutos)</label>
-              <input
-                type="number"
-                value={estimatedMinutes}
-                onChange={e => setEstimatedMinutes(Number(e.target.value))}
-                min={0}
-                className="w-full bg-surface-container-low border-none rounded-xl p-4 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-              />
-              <p className="text-xs text-stone-400">Si defines un tiempo, al vencimiento se notificará a los estudiantes (requiere activar el job en la DB).</p>
-            </div>
-
-            <div className="space-y-2">
+          <div className="space-y-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-stone-400 ml-1">Fecha/Hora de Vencimiento (opcional)</label>
               <input
                 type="datetime-local"
@@ -494,17 +449,8 @@ export default function NewCase() {
                 onChange={e => setExpireDateTime(e.target.value)}
                 className="w-full bg-surface-container-low border-none rounded-xl p-4 text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
               />
-              <p className="text-xs text-stone-400">Si completas una fecha, esta tendrá prioridad sobre el tiempo estimado. Por defecto sugiere +7 días si no se indica.</p>
+              <p className="text-xs text-stone-400">Si se completa, el caso se cerrará automáticamente en esa fecha y hora.</p>
             </div>
-
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-widest text-stone-400 ml-1">Notificar ahora</label>
-              <div className="flex items-center gap-3">
-                <input id="notifyNow" type="checkbox" checked={notifyNow} onChange={e => setNotifyNow(e.target.checked)} />
-                <label htmlFor="notifyNow" className="text-sm text-stone-500">Enviar notificación inmediata a estudiantes</label>
-              </div>
-            </div>
-          </div>
 
           <div className="space-y-2">
             <label className="text-[10px] font-bold uppercase tracking-widest text-stone-400 ml-1">Antecedentes de Importancia</label>

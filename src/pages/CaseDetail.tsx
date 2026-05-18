@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   ArrowLeft, Stethoscope, Activity, History, Send, Lightbulb,
   Clock, Tag, BookOpen, ClipboardList, Image as ImageIcon, FileText,
-  Copy, RefreshCw, Check, ChevronDown, ChevronUp, Users, Pencil, Star, Lock
+  Copy, RefreshCw, Check, ChevronDown, ChevronUp, Users, Pencil, Star, Lock,
+  CheckCircle2, Trophy, Upload, Trash2, Paperclip
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -145,6 +146,74 @@ function InvitePanel({ caseId }: { caseId: any }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CourseMembersPanel — alumnos inscritos al curso (solo docente)
+// ─────────────────────────────────────────────────────────────────────────────
+function CourseMembersPanel({ courseId }: { courseId: number | string }) {
+  const [members, setMembers] = useState<any[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      setLoadingMembers(true);
+      try {
+        const { data, error } = await (supabase.from as any)('course_members')
+          .select('id, joined_at, profiles ( id, full_name, email, avatar_url )')
+          .eq('course_id', courseId)
+          .order('joined_at', { ascending: true });
+        if (!error) setMembers((data as any[]) ?? []);
+      } catch { /* ignore */ }
+      setLoadingMembers(false);
+    })();
+  }, [courseId]);
+
+  return (
+    <div className="bg-white rounded-2xl border border-outline-variant/10 shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 px-5 py-4 border-b border-outline-variant/10">
+        <Users size={15} className="text-primary" />
+        <h3 className="text-sm font-bold text-on-background">Alumnos inscritos</h3>
+        <span className="ml-auto text-xs font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+          {members.length}
+        </span>
+      </div>
+      {loadingMembers ? (
+        <div className="flex justify-center py-6">
+          <div className="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : members.length === 0 ? (
+        <p className="text-sm text-secondary text-center py-6 px-5">
+          Aún no hay alumnos inscritos en este curso.
+        </p>
+      ) : (
+        <div className="max-h-60 overflow-y-auto divide-y divide-outline-variant/10">
+          {members.map((m) => {
+            const p = m.profiles;
+            const initials = (p?.full_name ?? p?.email ?? '?').slice(0, 2).toUpperCase();
+            return (
+              <div key={m.id} className="flex items-center gap-3 px-5 py-3">
+                {p?.avatar_url ? (
+                  <img src={p.avatar_url} alt={p.full_name} className="w-8 h-8 rounded-full object-cover shrink-0" />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-primary/10 text-primary text-[11px] font-black flex items-center justify-center shrink-0">
+                    {initials}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-on-background truncate">{p?.full_name ?? '—'}</p>
+                  <p className="text-[11px] text-secondary truncate">{p?.email ?? ''}</p>
+                </div>
+                <span className="text-[10px] text-outline shrink-0">
+                  {new Date(m.joined_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 export function CaseDetail() {
@@ -168,6 +237,14 @@ export function CaseDetail() {
   const [existingGrade, setExistingGrade] = useState<any | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  // Veredicto final
+  const [veredicto, setVeredicto] = useState('');
+  const [savingVeredicto, setSavingVeredicto] = useState(false);
+  const [veredictoSaved, setVeredictoSaved] = useState(false);
+  // Case files upload (teacher)
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [deletingFileId, setDeletingFileId] = useState<number | null>(null);
+  const fileUploadRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -194,6 +271,7 @@ export function CaseDetail() {
           }
         }
         setCaso(data ?? null);
+        if (data?.veredicto_final) setVeredicto(data.veredicto_final);
 
         // fetch creator name
         if (data) {
@@ -327,18 +405,35 @@ export function CaseDetail() {
       const { data: userData } = await supabase.auth.getUser();
       const uid = (userData as any)?.user?.id ?? userId ?? null;
 
-      // If editing, delete the existing resolution first
+      // Si ya existe una entrega → UPDATE en lugar de DELETE+INSERT
+      // Así conservamos el ID original y las evaluaciones previas siguen apuntando a él.
       if (isEditing && existingResolution) {
-        if (existingResolution._table === 'case_resolutions') {
-          await (supabase.from as any)('case_resolutions').delete().eq('id', existingResolution.id);
+        const updatedFields = existingResolution._table === 'case_resolutions'
+          ? { resolution: diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : ''), conclusion: justificacion }
+          : { diagnostico, plan_terapeutico: planTerapeutico, justificacion, estatus: 'En Revisión' };
+
+        const { error: upErr } = await (supabase.from as any)(existingResolution._table)
+          .update(updatedFields)
+          .eq('id', existingResolution.id);
+
+        if (upErr) {
+          alert('Error al actualizar: ' + upErr.message);
         } else {
-          await (supabase.from as any)('resoluciones').delete().eq('id', existingResolution.id);
+          // Actualizar el estado local para que la vista de solo-lectura muestre los nuevos valores
+          const updatedResolution = {
+            ...existingResolution,
+            ...(existingResolution._table === 'case_resolutions'
+              ? { resolution: diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : ''), conclusion: justificacion }
+              : { diagnostico, plan_terapeutico: planTerapeutico, justificacion }),
+          };
+          setExistingResolution(updatedResolution);
+          setIsEditing(false);
+          alert('¡Resolución actualizada correctamente!');
         }
-        setExistingResolution(null);
-        setExistingGrade(null);
-        setIsEditing(false);
+        return;
       }
 
+      // Primera vez enviando: INSERT
       let res: any = await (supabase.from as any)('resoluciones').insert({
         estudiante_id: uid,
         caso_id: caso.id,
@@ -354,8 +449,7 @@ export function CaseDetail() {
           case_id: caso.id,
           resolved_by: uid,
           resolution: diagnostico + (planTerapeutico ? '\n\nPlan:\n' + planTerapeutico : ''),
-          conclusion: justificacion,
-          status: 'En Revisión'
+          conclusion: justificacion
         }).select();
         console.log('[submitResolution] case_resolutions result:', res.data, res.error);
       } else {
@@ -377,6 +471,64 @@ export function CaseDetail() {
     }
   };
 
+  const saveVeredicto = async () => {
+    if (!caso || !veredicto.trim()) return;
+    setSavingVeredicto(true);
+    try {
+      const table = caso.titulo !== undefined ? 'clinical_cases' : 'clinical_cases';
+      const { error } = await (supabase.from as any)(table)
+        .update({ veredicto_final: veredicto.trim() })
+        .eq('id', caso.id);
+      if (error) throw error;
+      setCaso((prev: any) => ({ ...prev, veredicto_final: veredicto.trim() }));
+      setVeredictoSaved(true);
+      setTimeout(() => setVeredictoSaved(false), 3000);
+    } catch (err: any) {
+      alert('Error guardando veredicto: ' + (err?.message ?? String(err)));
+    } finally {
+      setSavingVeredicto(false);
+    }
+  };
+
+  const uploadCaseFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!caso?.id || !e.target.files?.length) return;
+    setUploadingFile(true);
+    const bucket = import.meta.env.VITE_CASE_FILES_BUCKET || 'case-files';
+    const { data: userData } = await supabase.auth.getUser();
+    const uid = (userData as any)?.user?.id ?? null;
+    for (let i = 0; i < e.target.files.length; i++) {
+      const file = e.target.files[i];
+      const ext = file.name.split('.').pop();
+      const path = `cases/${caso.id}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      try {
+        const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, { upsert: false });
+        if (upErr) { console.warn('upload error', upErr); continue; }
+        const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(path);
+        const publicUrl = urlData?.publicUrl ?? '';
+        const { data: inserted, error: dbErr } = await (supabase.from as any)('case_files')
+          .insert({ case_id: caso.id, uploaded_by: uid, file_name: file.name, file_url: publicUrl, mime: file.type, size: file.size })
+          .select().single();
+        if (!dbErr && inserted) setCaseFiles(prev => [...prev, inserted]);
+      } catch (err) { console.warn('uploadCaseFile unexpected', err); }
+    }
+    setUploadingFile(false);
+    if (fileUploadRef.current) fileUploadRef.current.value = '';
+  };
+
+  const deleteCaseFile = async (fileId: number, fileUrl: string) => {
+    if (!window.confirm('¿Eliminar este archivo?')) return;
+    setDeletingFileId(fileId);
+    try {
+      // Extract storage path from URL
+      const bucket = import.meta.env.VITE_CASE_FILES_BUCKET || 'case-files';
+      const urlParts = fileUrl.split(`/${bucket}/`);
+      if (urlParts[1]) await supabase.storage.from(bucket).remove([urlParts[1]]);
+      await (supabase.from as any)('case_files').delete().eq('id', fileId);
+      setCaseFiles(prev => prev.filter(f => f.id !== fileId));
+    } catch (err) { console.warn('deleteCaseFile', err); }
+    setDeletingFileId(null);
+  };
+
   // ── derived display values ──────────────────────────────────────────────────
   const titulo = caso?.titulo ?? caso?.title ?? 'Caso clínico';
   const categoria = caso?.categoria ?? caso?.category ?? '';
@@ -384,9 +536,11 @@ export function CaseDetail() {
   const estatus = caso?.estatus ?? caso?.status ?? '';
   const tiempoEstimado = caso?.tiempo_estimado ?? (caso?.estimated_minutes ? `${caso.estimated_minutes} min` : null);
   const expireAt = caso?.expire_at ?? null;
+  const isExpired = expireAt != null && new Date(expireAt) < new Date();
   const sintomas = caso?.sintomas ?? caso?.symptoms ?? caso?.description ?? caso?.initial_information ?? '';
   const antecedentes = caso?.antecedentes ?? caso?.clinical_history ?? '';
   const consejoMentor = caso?.consejo_mentor ?? '';
+  const veredictoFinal = caso?.veredicto_final ?? '';
   const etiquetas: string[] = Array.isArray(caso?.etiquetas) ? caso.etiquetas
     : Array.isArray(caso?.tags) ? caso.tags
     : typeof caso?.etiquetas === 'string' ? caso.etiquetas.split(',').map((t: string) => t.trim()).filter(Boolean)
@@ -468,8 +622,8 @@ export function CaseDetail() {
               </span>
             )}
             {expireAt && (
-              <span className="flex items-center gap-1.5 text-orange-500">
-                <Clock size={13} /> Vence: {new Date(expireAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              <span className={`flex items-center gap-1.5 ${isExpired ? 'text-red-600 font-bold' : 'text-orange-500'}`}>
+                <Clock size={13} /> {isExpired ? 'Cerrado: ' : 'Vence: '}{new Date(expireAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
             {creatorName && (
@@ -561,6 +715,62 @@ export function CaseDetail() {
             </div>
           )}
 
+          {/* ── Gestión de Archivos (docente) ─────────────────────────────── */}
+          {isTeacher && (
+            <div className="bg-white rounded-2xl border border-outline-variant/10 shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant/10">
+                <h3 className="flex items-center gap-2 text-sm font-bold text-on-background">
+                  <Paperclip size={15} className="text-primary" /> Archivos del Caso
+                </h3>
+                <label className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition-all
+                  ${uploadingFile ? 'bg-stone-100 text-stone-400' : 'bg-primary text-white hover:brightness-110'}`}>
+                  {uploadingFile
+                    ? <><div className="w-3 h-3 border-2 border-stone-300 border-t-stone-500 rounded-full animate-spin" /> Subiendo...</>
+                    : <><Upload size={13} /> Subir archivo</>}
+                  <input ref={fileUploadRef} type="file" multiple className="hidden" disabled={uploadingFile} onChange={uploadCaseFile} />
+                </label>
+              </div>
+              {caseFiles.length === 0 ? (
+                <div className="px-5 py-6 text-center text-sm text-secondary">
+                  No hay archivos adjuntos. Sube imágenes, PDFs u otros documentos para enriquecer el caso.
+                </div>
+              ) : (
+                <div className="divide-y divide-outline-variant/10">
+                  {caseFiles.map((f) => {
+                    const isImg = f.mime?.startsWith('image/') || /\.(jpe?g|png|gif|webp|svg)$/i.test(f.file_name ?? '');
+                    const isPdf = f.mime === 'application/pdf' || /\.pdf$/i.test(f.file_name ?? '');
+                    return (
+                      <div key={f.id} className="flex items-center gap-3 px-5 py-3">
+                        {isImg ? (
+                          <img src={f.file_url} alt={f.file_name} className="w-10 h-10 rounded-lg object-cover border border-outline-variant/20 shrink-0" />
+                        ) : (
+                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isPdf ? 'bg-red-50 text-red-500' : 'bg-stone-100 text-stone-500'}`}>
+                            <FileText size={18} />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-on-background truncate">{f.file_name}</p>
+                          <p className="text-[11px] text-secondary">
+                            {f.size ? `${(f.size / 1024).toFixed(0)} KB` : ''} {f.mime ?? ''}
+                          </p>
+                        </div>
+                        <a href={f.file_url} target="_blank" rel="noreferrer"
+                          className="text-xs text-primary font-bold hover:underline mr-2 shrink-0">Ver</a>
+                        <button
+                          onClick={() => deleteCaseFile(f.id, f.file_url)}
+                          disabled={deletingFileId === f.id}
+                          className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 transition-colors disabled:opacity-40"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Mentor hint */}
           {(consejoMentor || true) && (
             <div className="bg-tertiary/10 border-l-4 border-tertiary p-5 rounded-2xl flex gap-4 text-tertiary shadow-sm">
@@ -573,17 +783,79 @@ export function CaseDetail() {
               </div>
             </div>
           )}
+
+          {/* ── Veredicto Final ─────────────────────────────────────────── */}
+          {isExpired && (
+            isTeacher ? (
+              /* Teacher: editable panel */
+              <div className="bg-white rounded-2xl border-2 border-primary/20 shadow-sm overflow-hidden">
+                <div className="bg-primary/5 px-6 py-4 flex items-center gap-3 border-b border-primary/10">
+                  <Trophy size={18} className="text-primary shrink-0" />
+                  <div>
+                    <p className="text-sm font-black text-primary uppercase tracking-widest">Veredicto Final</p>
+                    <p className="text-[10px] text-secondary mt-0.5">Publica la solución correcta del caso — visible para todos los estudiantes.</p>
+                  </div>
+                </div>
+                <div className="p-5 space-y-3">
+                  <textarea
+                    value={veredicto}
+                    onChange={(e) => setVeredicto(e.target.value)}
+                    rows={6}
+                    placeholder="Escribe el diagnóstico correcto, el plan terapéutico ideal y la justificación clínica esperada..."
+                    className="w-full bg-surface-container-low border-0 ring-1 ring-outline-variant/30 rounded-2xl p-4 text-sm focus:ring-2 focus:ring-primary outline-none resize-none"
+                  />
+                  <button
+                    onClick={saveVeredicto}
+                    disabled={savingVeredicto || !veredicto.trim()}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white font-bold rounded-xl text-sm hover:brightness-110 transition-all disabled:opacity-50"
+                  >
+                    {savingVeredicto ? (
+                      <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Guardando...</>
+                    ) : veredictoSaved ? (
+                      <><CheckCircle2 size={15} /> ¡Guardado!</>
+                    ) : (
+                      <><Check size={15} /> Publicar veredicto</>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : veredictoFinal ? (
+              /* Student: read-only panel */
+              <div className="bg-gradient-to-br from-primary/5 to-primary/10 rounded-2xl border-2 border-primary/20 shadow-sm overflow-hidden">
+                <div className="px-6 py-4 flex items-center gap-3 border-b border-primary/10">
+                  <Trophy size={18} className="text-primary shrink-0" />
+                  <div>
+                    <p className="text-sm font-black text-primary uppercase tracking-widest">Veredicto Final del Docente</p>
+                    <p className="text-[10px] text-secondary mt-0.5">Esta es la solución correcta del caso.</p>
+                  </div>
+                </div>
+                <div className="px-6 py-5">
+                  <p className="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">{veredictoFinal}</p>
+                </div>
+              </div>
+            ) : null
+          )}
         </div>
 
         {/* Right column */}
         <aside className="lg:col-span-5 space-y-5">
           {/* Chat */}
           <div className="bg-white rounded-2xl p-4 border border-outline-variant/10 shadow-sm">
-            <CaseChat caseId={String(rawCaseId)} />
+            {isExpired && !isTeacher ? (
+              <div className="flex items-center gap-3 py-4 px-2 text-red-600">
+                <Lock size={16} className="shrink-0" />
+                <p className="text-sm font-bold">El chat está cerrado — este caso ha vencido.</p>
+              </div>
+            ) : (
+              <CaseChat caseId={String(rawCaseId)} />
+            )}
           </div>
 
           {/* Invite codes — teachers only */}
           {isTeacher && <InvitePanel caseId={rawCaseId} />}
+
+          {/* Course members — teachers only */}
+          {isTeacher && caso?.course_id && <CourseMembersPanel courseId={caso.course_id} />}
 
           {/* Decision panel */}
           <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/10 overflow-hidden">
@@ -611,6 +883,17 @@ export function CaseDetail() {
 
             {isTeacher || canParticipate ? (
               <>
+                {/* ── Case expired — students cannot submit ────────────────── */}
+                {isExpired && !isTeacher ? (
+                  <div className="p-8 text-center space-y-3">
+                    <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto">
+                      <Lock size={24} className="text-red-600" />
+                    </div>
+                    <h3 className="text-base font-bold text-red-700">Caso cerrado</h3>
+                    <p className="text-sm text-secondary">Este caso venció el {new Date(expireAt!).toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}. Ya no se aceptan nuevas decisiones.</p>
+                  </div>
+                ) : (
+                  <>
                 {/* ── Already submitted + not editing ──────────────────────── */}
                 {existingResolution && !isEditing ? (
                   <div className="p-6 space-y-5">
@@ -635,7 +918,15 @@ export function CaseDetail() {
                     </div>
                     {!existingGrade && (
                       <button
-                        onClick={() => setIsEditing(true)}
+                        onClick={() => {
+                          // Rellenar formulario con los valores actuales antes de editar
+                          if (existingResolution) {
+                            setDiagnostico(existingResolution.diagnostico ?? existingResolution.resolution ?? '');
+                            setPlanTerapeutico((existingResolution as any).plan_terapeutico ?? '');
+                            setJustificacion(existingResolution.justificacion ?? existingResolution.conclusion ?? '');
+                          }
+                          setIsEditing(true);
+                        }}
                         className="w-full py-3 border-2 border-primary text-primary font-black rounded-2xl hover:bg-primary/5 transition-all flex items-center justify-center gap-2 text-sm"
                       >
                         <Pencil size={15} /> Editar decisión
@@ -706,6 +997,8 @@ export function CaseDetail() {
                       Tu respuesta será evaluada por el cuerpo docente.
                     </p>
                   </form>
+                )}
+                  </>
                 )}
               </>
             ) : (

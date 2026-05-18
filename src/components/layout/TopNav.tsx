@@ -1,13 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Search, Bell, UserCircle, X, LogOut, Edit, LogIn } from 'lucide-react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { Bell, UserCircle, X, LogOut, Edit, LogIn } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 
 type NotificationRow = {
   id: number;
   title: string;
   message: string;
+  body?: string;
   case_id: number | null;
   is_read: boolean;
   created_at: string;
@@ -46,9 +47,9 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
           const { data } = await (supabase as any)
             .from('notifications')
             .select('*')
-            .or(`user_id.eq.${userId},course_id.is.not.null`)
+            .eq('user_id', userId)
             .order('created_at', { ascending: false })
-            .limit(10);
+            .limit(20);
           if (data) setNotifications(data as NotificationRow[]);
         }
       } catch (err) {
@@ -67,8 +68,8 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
         const userId = (userData as any)?.user?.id ?? null;
         const row = payload.new as any;
         if (!userId) return;
-        if (row.user_id === userId || row.course_id != null) {
-          setNotifications((prev) => [row as NotificationRow, ...prev].slice(0, 10));
+        if (row.user_id === userId) {
+          setNotifications((prev) => [row as NotificationRow, ...prev].slice(0, 20));
         }
       })
       .subscribe();
@@ -93,34 +94,10 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
         <button onClick={() => setMobileOpen?.(true)} className="lg:hidden p-2 rounded-md bg-surface-container-low">
           <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
         </button>
-        <h2 className="text-lg font-serif font-bold text-primary tracking-tight">BUAP Medical Scholar</h2>
-        
-        <nav className="hidden lg:flex items-center gap-6">
-          <NavLink to="/dashboard" className="text-sm font-medium hover:text-primary transition-colors">Dashboard</NavLink>
-          <NavLink to="/casos" className="text-sm font-medium text-secondary hover:text-primary transition-colors">Casos Clínicos</NavLink>
-          <NavLink to="/files" className="text-sm font-medium text-secondary hover:text-primary transition-colors">Expedientes</NavLink>
-          {isTeacher && (
-            <NavLink to="/gestion" className="text-sm font-medium text-secondary hover:text-primary transition-colors">Gestión</NavLink>
-          )}
-        </nav>
       </div>
 
         <div className="flex items-center gap-6">
-          <div className="relative group">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-outline" size={16} />
-          <input 
-            type="text" 
-            placeholder="Buscar casos..." 
-            className="pl-10 pr-4 py-2 bg-surface-container-low border-none rounded-full text-sm focus:ring-2 focus:ring-primary/20 w-64 transition-all outline-none"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  const q = (e.target as HTMLInputElement).value;
-                  if (q) navigate(`/casos?q=${encodeURIComponent(q)}`);
-                }
-              }}
-          />
-        </div>
-        
+          
         <div className="flex items-center gap-3 relative">
           {!isTeacher && (
             <button onClick={() => navigate('/unirse')} className="inline-flex items-center gap-2 px-3 py-2 bg-primary/10 text-primary rounded-full text-sm hover:bg-primary/20 transition-colors">
@@ -154,8 +131,8 @@ export function TopNav({ setMobileOpen }: { setMobileOpen?: (v: boolean) => void
                     }}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <div className="font-semibold text-sm">{n.title} {(n.case_id || (n as any).course_id) ? <span className="text-xs text-secondary ml-2">{n.case_id ? `(Caso ${n.case_id})` : `(Grupo ${(n as any).course_id})`}</span> : null}</div>
-                          <div className="text-xs text-secondary mt-1">{n.message}</div>
+                          <div className="font-semibold text-sm">{n.title} {n.case_id ? <span className="text-xs text-secondary ml-2">(Caso {n.case_id})</span> : null}</div>
+                          <div className="text-xs text-secondary mt-1">{n.body ?? n.message ?? ''}</div>
                         </div>
                         <div className="text-[10px] text-stone-400">{new Date(n.created_at).toLocaleString()}</div>
                       </div>
