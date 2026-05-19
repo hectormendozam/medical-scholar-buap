@@ -287,19 +287,30 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
           })();
         }
       }}>
-        {messages.map((msg) => (
-          <div key={msg.id} className={cn("flex flex-col", msg.user_id === userId ? "items-end" : "items-start")}>
+        {messages.map((msg) => {
+          const isOwn = msg.user_id === userId;
+          // Resolve display name: prefer user_name from message, then participants cache, then fallback
+          const cachedProfile = participants.find(p => p.id === msg.user_id);
+          const displayName = msg.user_name
+            ?? (cachedProfile as any)?.full_name
+            ?? (cachedProfile as any)?.username
+            ?? (cachedProfile as any)?.email?.split('@')[0]
+            ?? (msg.user_id ? `Usuario (${msg.user_id.substring(0, 6)})` : 'Anónimo');
+
+          return (
+          <div key={msg.id} className={cn("flex flex-col", isOwn ? "items-end" : "items-start")}>
             <div className="flex items-center gap-2 mb-1">
-              {msg.user_id !== userId && msg.user_name && (
-                <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">
-                  {msg.user_name}
-                </span>
-              )}
+              <span className={cn(
+                "text-[11px] font-bold tracking-wide",
+                isOwn ? "text-primary" : "text-stone-500"
+              )}>
+                {isOwn ? 'Tú' : displayName}
+              </span>
               <span className="text-[9px] text-stone-300">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             </div>
             <div className={cn(
               "max-w-[80%] p-3 rounded-2xl text-sm",
-              msg.user_id === userId 
+              isOwn
                 ? "bg-primary text-white rounded-tr-none" 
                 : "bg-surface-container-high text-on-surface rounded-tl-none"
             )}>
@@ -315,7 +326,8 @@ export function CaseChat({ caseId }: { caseId: number | string }) {
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <form onSubmit={handleSend} className="p-4 border-t border-surface-container-low bg-surface-container-low space-y-2">

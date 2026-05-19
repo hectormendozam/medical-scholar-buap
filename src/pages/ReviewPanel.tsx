@@ -167,14 +167,20 @@ export function ReviewPanel() {
       ...r,
       userName: r.userName || profileMap[r.userId] || (r.userId ? `Estudiante (${r.userId.substring(0, 6)})` : 'Desconocido'),
     }));
-    setAllResolutions(withNames);
-
-    // Fetch cases
+    // Fetch cases — solo los creados por el maestro actual
+    const currentUserId = (ud as any)?.user?.id;
     const { data: casesData } = await (supabase.from as any)('clinical_cases')
       .select('id, title, status')
+      .eq('created_by', currentUserId)
       .order('created_at', { ascending: false });
+
+    // Filtrar entregas solo de los casos del maestro
+    const myCaseIds = new Set(((casesData as any[]) ?? []).map((c: any) => String(c.id)));
+    const myResolutions = withNames.filter((r) => myCaseIds.has(String(r.caseId)));
+    setAllResolutions(myResolutions);
+
     const casesArr = ((casesData as any[]) ?? []).map((c: any) => {
-      const subs = withNames.filter((r) => String(r.caseId) === String(c.id));
+      const subs = myResolutions.filter((r) => String(r.caseId) === String(c.id));
       return {
         id: c.id,
         title: c.title ?? c.titulo ?? `Caso #${c.id}`,
@@ -188,7 +194,7 @@ export function ReviewPanel() {
 
     // Si hay un caso abierto, refrescar sus entregas y la seleccionada
     if (currentSelectedCaseId != null) {
-      const updatedSubs = withNames.filter((r) => String(r.caseId) === String(currentSelectedCaseId));
+      const updatedSubs = myResolutions.filter((r) => String(r.caseId) === String(currentSelectedCaseId));
       setCaseResolutions(updatedSubs);
       setSelectedRes((prev) => {
         if (!prev) return updatedSubs[0] ?? null;

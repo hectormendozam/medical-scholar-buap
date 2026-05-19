@@ -313,7 +313,14 @@ export function CaseDetail() {
               } else {
                 const { data: invite } = await (supabase.from as any)('case_invites')
                   .select('id').eq('case_id', data.id).eq('used_by', userId).limit(1).maybeSingle();
-                if (invite) setCanParticipate(true);
+                if (invite) {
+                  setCanParticipate(true);
+                } else if (data.course_id) {
+                  // También puede participar si es miembro del curso asociado al caso
+                  const { data: membership } = await (supabase.from as any)('course_members')
+                    .select('id').eq('course_id', data.course_id).eq('user_id', userId).limit(1).maybeSingle();
+                  if (membership) setCanParticipate(true);
+                }
               }
             } catch { /* ignore */ }
           }

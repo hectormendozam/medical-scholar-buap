@@ -81,6 +81,7 @@ export function Dashboard() {
         nombre_paciente: r.nombre_paciente ?? null,
         estatus: r.estatus ?? r.status ?? 'borrador',
         created_at: r.created_at ?? r.published_at ?? null,
+        expire_at: r.expire_at ?? null,
         __raw: r,
       }));
       setAssignedCases(normalized as unknown as CasoClinico[]);
@@ -406,7 +407,21 @@ export function Dashboard() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8">
-          {assignedCases.map((c) => (
+          {assignedCases.map((c) => {
+            const expireAt = (c as any).expire_at ? new Date((c as any).expire_at) : null;
+            const now = new Date();
+            const isExpired = expireAt ? expireAt < now : false;
+            const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+            const isToday = expireAt ? (expireAt >= todayStart && expireAt < todayEnd) : false;
+            const limiteLabel = !expireAt
+              ? 'Sin fecha límite'
+              : isToday
+                ? `Hoy a las ${expireAt.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}`
+                : expireAt.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+            const limiteColor = !expireAt ? 'text-secondary' : isExpired ? 'text-stone-400' : isToday ? 'text-amber-600 font-bold' : 'text-blue-500';
+
+            return (
             <motion.div 
               key={c.id}
               whileHover={{ y: -8 }}
@@ -445,9 +460,9 @@ export function Dashboard() {
                 </div>
 
                 <div className="space-y-2 border-t border-surface-container pt-4">
-                  <div className="flex items-center gap-2 text-secondary text-xs">
-                    <Calendar size={14} className="text-outline" />
-                    <span>Límite: No definido</span>
+                  <div className={`flex items-center gap-2 text-xs ${limiteColor}`}>
+                    <Calendar size={14} className="shrink-0" />
+                    <span>Límite: {limiteLabel}</span>
                   </div>
                   <div className="flex items-center gap-2 text-secondary text-xs">
                     {c.estatus === 'Completado' ? (
@@ -469,7 +484,8 @@ export function Dashboard() {
                 </button>
               </div>
             </motion.div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

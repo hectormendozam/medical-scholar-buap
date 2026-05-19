@@ -1,4 +1,4 @@
-import { Stethoscope, Filter, Search, ChevronRight, Clock, Star, KeyRound } from 'lucide-react';
+import { Stethoscope, Filter, Search, ChevronRight, Clock, Star, KeyRound, AlertCircle, CalendarClock, ChevronDown, ChevronUp } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
@@ -15,6 +15,9 @@ export default function ClinicalCases() {
   const [joiningCode, setJoiningCode] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   const [showJoinInput, setShowJoinInput] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ today: true, week: true, month: true, later: false, noDate: false });
+
+  const toggleGroup = (key: string) => setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
 
   useEffect(() => {
     if (!userId) return;
@@ -81,9 +84,31 @@ export default function ClinicalCases() {
       tiempo_estimado: r.tiempo_estimado ?? r.estimated_minutes ? `${r.estimated_minutes} min` : r.tiempo_estimado ?? null,
       estatus: r.estatus ?? r.status ?? 'borrador',
       created_at: r.created_at ?? r.published_at ?? null,
+      expire_at: r.expire_at ?? null,
       __raw: r,
     }));
     setCases(normalized as unknown as CasoClinico[]);
+  }
+
+  // ── Expiry label helper ─────────────────────────────────────────────────────
+  function expiryLabel(expire_at: string | null | undefined): { label: string; isToday: boolean; isExpired: boolean } | null {
+    if (!expire_at) return null;
+    const exp = new Date(expire_at);
+    const now = new Date();
+    const isExpired = exp < now;
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    const isToday = exp >= todayStart && exp < todayEnd;
+    if (isToday) {
+      const hhmm = exp.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+      return { label: `Vence hoy a las ${hhmm}`, isToday: true, isExpired: false };
+    }
+    if (isExpired) {
+      const fecha = exp.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+      return { label: `Venció el ${fecha}`, isToday: false, isExpired: true };
+    }
+    const fecha = exp.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+    return { label: `Vence el ${fecha}`, isToday: false, isExpired: false };
   }
 
   async function handleJoinCode() {
@@ -118,9 +143,43 @@ export default function ClinicalCases() {
     finally { setJoiningCode(false); }
   }
 
+  // ── Group cases by expiry ─────────────────────────────────────────────────
+  function groupCases(list: CasoClinico[]) {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayEnd   = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    const weekEnd    = new Date(todayStart.getTime() + 7  * 24 * 60 * 60 * 1000);
+    const monthEnd   = new Date(todayStart.getFullYear(), todayStart.getMonth() + 1, todayStart.getDate());
+
+    const today: CasoClinico[]    = [];
+    const week: CasoClinico[]     = [];
+    const month: CasoClinico[]    = [];
+    const later: CasoClinico[]    = [];
+    const noDate: CasoClinico[]   = [];
+
+    for (const c of list) {
+      const exp = (c as any).expire_at ? new Date((c as any).expire_at) : null;
+      if (!exp) { noDate.push(c); continue; }
+      if (exp >= todayStart && exp < todayEnd) today.push(c);
+      else if (exp >= todayEnd && exp < weekEnd) week.push(c);
+      else if (exp >= weekEnd && exp < monthEnd) month.push(c);
+      else later.push(c);
+    }
+    return { today, week, month, later, noDate };
+  }
+
   const filtered = cases.filter((c) =>
     !search || c.titulo.toLowerCase().includes(search.toLowerCase()) || (c.categoria ?? '').toLowerCase().includes(search.toLowerCase())
   );
+  const groups = groupCases(filtered);
+
+  const groupDefs = [
+    { key: 'today',  label: 'Vence hoy',          icon: <AlertCircle  size={15} />, color: 'text-amber-600',  bg: 'bg-amber-50 border-amber-200',   items: groups.today  },
+    { key: 'week',   label: 'Vence esta semana',   icon: <CalendarClock size={15}/>, color: 'text-blue-600',   bg: 'bg-blue-50 border-blue-200',     items: groups.week   },
+    { key: 'month',  label: 'Vence este mes',       icon: <CalendarClock size={15}/>, color: 'text-indigo-600', bg: 'bg-indigo-50 border-indigo-200', items: groups.month  },
+    { key: 'later',  label: 'Vence más adelante',   icon: <CalendarClock size={15}/>, color: 'text-stone-500',  bg: 'bg-stone-50 border-stone-200',   items: groups.later  },
+    { key: 'noDate', label: 'Sin fecha de vencimiento', icon: <Clock size={15}/>,   color: 'text-stone-400',  bg: 'bg-stone-50 border-stone-200',   items: groups.noDate },
+  ].filter(g => g.items.length > 0);
 
   return (
     <div className="max-w-6xl mx-auto space-y-8">
@@ -206,42 +265,75 @@ export default function ClinicalCases() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4">
-          {filtered.map((c) => (
-            <Link
-              key={c.id}
-              to={`/casos/${c.id}`}
-              className="group bg-white dark:bg-surface p-6 rounded-2xl ghost-border shadow-sm hover:shadow-md hover:border-primary/30 transition-all flex items-center justify-between"
-            >
-              <div className="flex items-center gap-6">
-                <div className="p-4 bg-primary/5 rounded-2xl text-primary group-hover:bg-primary group-hover:text-white transition-colors">
-                  <Stethoscope className="w-6 h-6" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <h3 className="text-lg font-bold text-on-surface group-hover:text-primary transition-colors">{c.titulo}</h3>
-                    {c.categoria && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 bg-stone-100 dark:bg-surface-container-high text-stone-500 rounded-full uppercase tracking-widest">{c.categoria}</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-stone-400">
-                    {c.nivel && <span className="flex items-center gap-1"><Star className="w-3 h-3" /> {c.nivel}</span>}
-                    {c.tiempo_estimado && <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {c.tiempo_estimado}</span>}
-                    <span className="font-bold uppercase tracking-widest text-[10px]">ID: #{c.id}</span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest ${
-                  c.estatus === 'publicado' ? 'bg-green-100 text-green-700' :
-                  c.estatus === 'cerrado'   ? 'bg-stone-100 text-stone-500' :
-                  'bg-amber-100 text-amber-700'
-                }`}>
-                  {c.estatus}
+        <div className="space-y-4">
+          {groupDefs.map((group) => (
+            <div key={group.key} className={`rounded-2xl border overflow-hidden ${group.bg}`}>
+              {/* Group header */}
+              <button
+                onClick={() => toggleGroup(group.key)}
+                className="w-full flex items-center gap-3 px-5 py-4 hover:brightness-95 transition-all"
+              >
+                <span className={group.color}>{group.icon}</span>
+                <span className={`font-bold text-sm ${group.color}`}>{group.label}</span>
+                <span className={`ml-1 text-xs font-bold px-2 py-0.5 rounded-full bg-white/70 ${group.color}`}>{group.items.length}</span>
+                <span className="ml-auto text-stone-400">
+                  {openGroups[group.key] ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                 </span>
-                <ChevronRight className="text-stone-300 group-hover:text-primary group-hover:translate-x-1 transition-all" />
-              </div>
-            </Link>
+              </button>
+
+              {/* Group items */}
+              {openGroups[group.key] && (
+                <div className="bg-white divide-y divide-stone-100">
+                  {group.items.map((c) => {
+                    const expiry = expiryLabel((c as any).expire_at);
+                    return (
+                      <Link
+                        key={c.id}
+                        to={`/casos/${c.id}`}
+                        className="group flex items-center justify-between px-5 py-4 hover:bg-primary/5 transition-colors"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="p-3 bg-primary/5 rounded-xl text-primary group-hover:bg-primary group-hover:text-white transition-colors">
+                            <Stethoscope className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-3 mb-0.5">
+                              <h3 className="font-bold text-on-surface group-hover:text-primary transition-colors">{c.titulo}</h3>
+                              {c.categoria && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 bg-stone-100 text-stone-500 rounded-full uppercase tracking-widest">{c.categoria}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-4 text-xs text-stone-400">
+                              {c.nivel && <span className="flex items-center gap-1"><Star className="w-3 h-3" /> {c.nivel}</span>}
+                              {c.tiempo_estimado && <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {c.tiempo_estimado}</span>}
+                              <span className="font-bold uppercase tracking-widest text-[10px]">ID: #{c.id}</span>
+                              {expiry && (
+                                <span className={`flex items-center gap-1 font-semibold ${
+                                  expiry.isExpired ? 'text-stone-400' : expiry.isToday ? 'text-amber-600' : 'text-blue-500'
+                                }`}>
+                                  {expiry.isToday ? <AlertCircle className="w-3 h-3" /> : <CalendarClock className="w-3 h-3" />}
+                                  {expiry.label}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest ${
+                            c.estatus === 'publicado' ? 'bg-green-100 text-green-700' :
+                            c.estatus === 'cerrado'   ? 'bg-stone-100 text-stone-500' :
+                            'bg-amber-100 text-amber-700'
+                          }`}>
+                            {c.estatus}
+                          </span>
+                          <ChevronRight className="text-stone-300 group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
